@@ -8,7 +8,7 @@ them. These run inside Synchronicity's socket runtime, not the Linux kernel.
 | --- | --- | --- |
 | `echo` | Echoes binary streams with backpressure; 30-second idle timeout | Any caller able to connect; 16 concurrent streams |
 | `whoami` | Prints authenticated origin, device key and peer kind, then closes | Any caller able to connect; 8 concurrent streams |
-| `ssh-shell` | Interactive `/bin/bash` with PTY; read/write SFTP under `files` | Configured node public keys; 4 concurrent connections, one session per connection |
+| `ssh-shell` | Interactive `/bin/bash` with PTY; read/write SFTP under `files` | Configured origins or node public keys; 4 concurrent connections, one session per connection |
 
 Built against the SDK revision in [UPSTREAM.md](UPSTREAM.md). Review the
 capabilities shown when activating a socket. Existing Synchronicity
@@ -41,27 +41,33 @@ Its `peer-key` output is hex; the SSH allowlist below uses z-base-32.
 
 ## SSH and SFTP
 
-Set `allowed_node_key` to one or more **52-character, unpadded z-base-32
-node public keys**, exactly as printed by `synch id` (alphabet
-`ybndrfg8ejkmcpqxot1uwisza345h769`, not RFC 4648 base32). Separate keys by
-commas. Either case is accepted, with optional spaces, tabs or newlines around
-each key. Quote the value when
-it contains whitespace. Use at most 16 keys and 1023 bytes of configuration.
-Hex, `=` padding, empty entries and malformed keys are rejected. The entire
-list must be valid, even if an earlier key matches the caller.
+Set `allowed_peers` to a comma-separated list of authenticated peer origins
+and/or node public keys:
 
-This identifies authenticated nodes, not origin names, SSH keys or connection
-metadata. Verify the nodes independently before granting them shell access.
+- Origins use `host@domain`, as shown by `synch id`. Matching uses the
+  authenticated origin, never connection metadata. ASCII case is normalized
+  and trailing domain dots are removed; wildcards are not supported.
+- Public keys use the **52-character, unpadded z-base-32** node ID printed by
+  `synch id` (alphabet `ybndrfg8ejkmcpqxot1uwisza345h769`, not RFC 4648 base32).
+  Either case is accepted; hex and `=` padding are rejected.
+
+Spaces, tabs and newlines around entries are allowed. Quote values containing
+whitespace. Use at most 16 peers and 1023 bytes of configuration. Empty or
+malformed entries invalidate the entire list, even after an entry matches.
 Missing configuration or a caller absent from the list rejects the connection
 before SSH starts.
 
 ```sh
 synch fetch https://raw.githubusercontent.com/AFK-surf/sykit/main/objects/ssh-shell.o code/ssh.sock
-synch socket activate code/ssh.sock --config 'allowed_node_key=FIRST_BASE32_NODE_KEY,SECOND_BASE32_NODE_KEY'
+synch socket activate code/ssh.sock --config 'allowed_peers=laptop@example.com,BASE32_NODE_PUBLIC_KEY'
 ```
 
-For a single node, supply just its z-base-32 key without a comma. Existing
-hex-valued activations must be updated to z-base-32 when deploying this version.
+A single origin or key needs no comma. `allowed_node_key` is no longer read;
+existing activations must switch to `allowed_peers` when deploying this version.
+An origin rule follows whichever node key the membership system authenticates
+for that name, including key rotation. A public-key rule pins one device key
+regardless of its origin. Verify the peers and the origin's membership authority
+before granting shell access.
 
 From an allowed node:
 

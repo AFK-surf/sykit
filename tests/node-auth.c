@@ -13,10 +13,11 @@ static const char *config;
 static sy_s64 reported_length;
 static sy_s64 peer_result;
 static sy_u8 peer_key[32];
+static const char *peer_origin = "laptop@cluster.example";
 
 sy_s64 sy_config_get(const char *key, sy_u64 key_len, char *out, sy_u64 cap) {
-    assert(key_len == strlen("allowed_node_key"));
-    assert(memcmp(key, "allowed_node_key", key_len) == 0);
+    assert(key_len == strlen("allowed_peers"));
+    assert(memcmp(key, "allowed_peers", key_len) == 0);
     if (config) {
         sy_u64 n = reported_length > 0 ? (sy_u64)reported_length : 0;
         if (n >= cap) n = cap - 1;
@@ -24,6 +25,9 @@ sy_s64 sy_config_get(const char *key, sy_u64 key_len, char *out, sy_u64 cap) {
         out[n] = 0;
     }
     return reported_length;
+}
+sy_s64 sy_peer_origin(char *out, sy_u64 capacity) {
+    return snprintf(out, (size_t)capacity, "%s", peer_origin);
 }
 sy_s64 sy_peer_device_key(void *out) {
     if (peer_result < 0) return peer_result;
@@ -119,6 +123,46 @@ int main(void) {
     check("EE6486K16KN8JO96HUHTYJS4YFN6ACPR4NBUSYY69BS4OH1HHX7O", 1);
     peer_key[31] ^= 1;
     check("ee6486k16kn8jo96huhtyjs4yfn6acpr4nbusyy69bs4oh1hhx7o", 0);
+    check("laptop@cluster.example", 1);
+    check(" LAPTOP@CLUSTER.EXAMPLE... ", 1);
+    check("other@cluster.example", 0);
+    check("laptop@other.example", 0);
+    check("laptop@cluster.example.evil", 0);
+    memset(peer_key, 0xcc, sizeof peer_key);
+    check("laptop@cluster.example", 1); /* origin rule follows authenticated key rotation */
+    snprintf(list, sizeof list, "%s, laptop@cluster.example", a);
+    check(list, 1);
+    memset(peer_key, 0xaa, sizeof peer_key);
+    snprintf(list, sizeof list, "other@cluster.example,%s", a);
+    check(list, 1);
+    const char *bad_origins[] = {
+        "@cluster.example", "laptop@", "laptop@.", "laptop@@cluster.example",
+        "laptop@cluster..example", "laptop@-cluster.example", "laptop@cluster-.example",
+        "lap_top@cluster.example", "laptop@cluster.example/evil", "*@cluster.example"
+    };
+    for (unsigned i = 0; i < sizeof bad_origins / sizeof bad_origins[0]; ++i) {
+        snprintf(list, sizeof list, "%s,%s", a, bad_origins[i]);
+        check(list, 0); /* malformed origins cannot hide behind a matching key */
+    }
+    memset(mutated, 'a', 52);
+    mutated[52] = 0;
+    snprintf(list, sizeof list, "%s%s@cluster.example", mutated, mutated);
+    check(list, 0); /* oversized member */
+    snprintf(list, sizeof list, "laptop@%s%s.example", mutated, mutated);
+    check(list, 0); /* oversized domain label */
+    peer_origin = "other@cluster.example";
+    check("laptop@cluster.example", 0);
+    char label[64], longest[319];
+    memset(label, 'a', 63);
+    label[63] = 0;
+    snprintf(longest, sizeof longest, "%s@%s.%s.%s.%.61s", label, label, label, label, label);
+    assert(strlen(longest) == 317);
+    peer_origin = longest;
+    check(longest, 1); /* maximum canonical origin fits the host buffer */
+    peer_origin = "laptop@cluster.example";
+    longest[317] = 'a';
+    longest[318] = 0;
+    check(longest, 0); /* 254-byte domain, despite each label fitting */
     memset(peer_key, 0xaa, sizeof peer_key);
     peer_result = SY_EPERM;
     check(a, 0);

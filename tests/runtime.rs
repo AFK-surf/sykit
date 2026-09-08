@@ -52,6 +52,9 @@ async fn ssh_denies_before_handshake_even_with_spoofed_metadata() {
         Some("a".repeat(65)),
         Some("0".repeat(64)),
         Some(alternate_key()),
+        Some("other@cluster.example".into()),
+        Some("laptop@cluster.example.evil".into()),
+        Some("laptop@cluster.example,invalid@".into()),
         Some(format!("{},invalid", allowed_key())),
         Some(format!("{},", allowed_key())),
         Some(format!(",{}", allowed_key())),
@@ -61,7 +64,7 @@ async fn ssh_denies_before_handshake_even_with_spoofed_metadata() {
     ] {
         let policy = EffectivePolicy {
             config: key
-                .map(|k| vec![("allowed_node_key".into(), k)])
+                .map(|k| vec![("allowed_peers".into(), k)])
                 .unwrap_or_default(),
             ..EffectivePolicy::default()
         };
@@ -71,7 +74,11 @@ async fn ssh_denies_before_handshake_even_with_spoofed_metadata() {
             b"SSH-2.0-test\r\n",
             policy,
             peer(None),
-            vec![("allowed_node_key".into(), allowed_key())],
+            vec![
+                ("allowed_peers".into(), allowed_key()),
+                ("origin".into(), "other@cluster.example".into()),
+                ("peer-origin".into(), "other@cluster.example".into()),
+            ],
         )
         .await;
         assert_eq!(status, SockStatus::Ok(1));
@@ -79,6 +86,82 @@ async fn ssh_denies_before_handshake_even_with_spoofed_metadata() {
             output.is_empty(),
             "denied nodes must not receive an SSH banner"
         );
+    }
+}
+
+#[tokio::test]
+async fn legacy_key_configuration_does_not_authorize() {
+    let policy = EffectivePolicy {
+        config: vec![("allowed_node_key".into(), allowed_key())],
+        ..EffectivePolicy::default()
+    };
+    let (status, output) = exchange(
+        &Harness::new(),
+        &object("ssh-shell"),
+        b"",
+        policy,
+        peer(None),
+        vec![],
+    )
+    .await;
+    assert_eq!(status, SockStatus::Ok(1));
+    assert!(output.is_empty());
+}
+
+#[tokio::test]
+async fn origin_rule_authorizes_authenticated_name_across_device_keys() {
+    use std::time::Duration;
+    for device_key in [
+        peer(None).device_key,
+        *alternate_key()
+            .parse::<synch_core::OriginId>()
+            .unwrap()
+            .as_key()
+            .unwrap(),
+    ] {
+        let harness = Harness::new();
+        let mut caller = peer(None);
+        caller.device_key = device_key;
+        let policy = EffectivePolicy {
+            config: vec![("allowed_peers".into(), "LAPTOP@CLUSTER.EXAMPLE...".into())],
+            ..EffectivePolicy::default()
+        };
+        let (client_stream, server_stream) = tokio::io::duplex(4096);
+        let (reader, writer) = tokio::io::split(server_stream);
+        let invocation = harness.invocation(
+            &object("ssh-shell"),
+            DuplexStream::new(reader, writer),
+            policy,
+            caller,
+            vec![],
+        );
+        let run = tokio::spawn(async move { harness.pool.run(invocation).await.unwrap() });
+        let mut client = tokio::time::timeout(
+            Duration::from_secs(5),
+            russh::client::connect_stream(
+                Arc::new(russh::client::Config::default()),
+                client_stream,
+                ShellClient,
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(client
+            .authenticate_none("operator")
+            .await
+            .unwrap()
+            .success());
+        client
+            .disconnect(russh::Disconnect::ByApplication, "done", "en")
+            .await
+            .unwrap();
+        drop(client);
+        let outcome = tokio::time::timeout(Duration::from_secs(5), run)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(outcome.status, SockStatus::Ok(0));
     }
 }
 
@@ -209,7 +292,10 @@ async fn ssh_shell_serves_the_declared_bash_on_a_pty() {
 
     let policy = EffectivePolicy::granted(
         &declaration,
-        vec![("allowed_node_key".into(), allowed_keys())],
+        vec![(
+            "allowed_peers".into(),
+            format!("{}, laptop@cluster.example", alternate_key()),
+        )],
         None,
         64,
     );
@@ -418,7 +504,7 @@ async fn ssh_shell_serves_declared_read_write_sftp() {
 
     let policy = EffectivePolicy::granted(
         &declaration,
-        vec![("allowed_node_key".into(), allowed_keys())],
+        vec![("allowed_peers".into(), allowed_keys())],
         None,
         64,
     );

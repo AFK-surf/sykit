@@ -29,7 +29,7 @@ Docker's injected root files do not enter the artifact comparison.
 
 ## Checks
 
-`./scripts/test.sh` covers malformed/mismatched z-base-32 node keys, complete
+`./scripts/test.sh` covers malformed/mismatched origins and z-base-32 node keys, complete
 allowlist validation, immutable artifact selection, stale artifact detection
 and dangling-symlink refusal.
 `./scripts/test-runtime.sh /path/to/synchronicity` executes committed BPF objects
@@ -54,6 +54,9 @@ socket. Keep activated script paths, activation configuration, the allowed
 node's identity and the build host under operator control. Reproducible builds
 and checksums establish consistency, not the trustworthiness of their source.
 
-The node allowlist accepts up to 16 comma-separated, unpadded z-base-32 keys.
-Parsing validates every entry and the final unused encoding bits before
-granting access. Hex configuration is rejected.
+`allowed_peers` accepts up to 16 comma-separated named origins or unpadded
+z-base-32 public keys. Parsing validates every entry and the final unused key
+encoding bits before granting access. Origin rules compare the authenticated
+`sy_peer_origin` value after normalizing the configured name, and therefore
+trust the membership authority to associate that name with a device key.
+Hex and the former `allowed_node_key` setting are not accepted.
