@@ -7,7 +7,7 @@ them. These run inside Synchronicity's socket runtime, not the Linux kernel.
 | Program | Behavior | Access |
 | --- | --- | --- |
 | `echo` | Echoes binary streams with backpressure; 30-second idle timeout | Any caller able to connect; 16 concurrent streams |
-| `whoami` | Prints authenticated origin, device key and peer kind | Any caller able to connect; 8 concurrent streams |
+| `whoami` | Prints authenticated origin, device key and peer kind, then closes | Any caller able to connect; 8 concurrent streams |
 | `ssh-shell` | Interactive `/bin/bash` with PTY; read/write SFTP under `files` | One configured node public key; 4 concurrent connections, one session per connection |
 
 Built against the SDK revision in [UPSTREAM.md](UPSTREAM.md). Review the

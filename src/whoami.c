@@ -30,6 +30,8 @@ SY_ENTRY sy_s64 entry(void) {
     len = sy_json_get_string(info, SY_STR("kind"), kind, sizeof kind);
     sy_close(info);
     if (field("peer-kind: ", kind, len, sizeof kind) < 0) return 1;
-    sy_shutdown(SY_SELF);
+    /* Release both directions immediately; the runtime drains queued text.
+       Do not wait for the caller to send input or close its write half. */
+    sy_close(SY_SELF);
     return 0;
 }

@@ -5,7 +5,7 @@ use harness::{converse, exchange, peer, Harness};
 use std::sync::Arc;
 use synch_core::SockStatus;
 use synch_sock::{DuplexStream, EffectivePolicy, Limits};
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 fn object(name: &str) -> Vec<u8> {
     std::fs::read(
@@ -69,21 +69,39 @@ async fn echo_preserves_bytes_under_backpressure() {
 }
 
 #[tokio::test]
-async fn whoami_reports_transport_identity_only() {
-    let (status, out) = exchange(
-        &Harness::new(),
+async fn whoami_sends_identity_and_closes_without_client_eof() {
+    use std::time::Duration;
+    let harness = Harness::new();
+    let (mut client, server) = tokio::io::duplex(32);
+    let (reader, writer) = tokio::io::split(server);
+    let invocation = harness.invocation(
         &object("whoami"),
-        b"",
+        DuplexStream::new(reader, writer),
         EffectivePolicy::default(),
         peer(None),
         vec![("tag".into(), "\npeer-key: forged".into())],
-    )
-    .await;
-    assert_eq!(status, SockStatus::Ok(0));
-    let out = String::from_utf8(out).unwrap();
-    assert!(out.contains(&format!("peer-key: {}\n", allowed_key())));
-    assert!(out.contains("peer-kind: member\n"));
-    assert!(!out.contains("forged"));
+    );
+    let run = tokio::spawn(async move { harness.pool.run(invocation).await.unwrap() });
+    let mut out = Vec::new();
+    // Keep the client's write half open and send nothing. The server must
+    // flush its complete reply and EOF even while a client could send input.
+    tokio::time::timeout(Duration::from_secs(2), client.read_to_end(&mut out))
+        .await
+        .expect("whoami must close without waiting for client EOF")
+        .unwrap();
+    let outcome = tokio::time::timeout(Duration::from_secs(2), run)
+        .await
+        .expect("the server invocation must finish")
+        .unwrap();
+    assert_eq!(outcome.status, SockStatus::Ok(0));
+    assert_eq!(
+        String::from_utf8(out).unwrap(),
+        format!(
+            "peer-origin: {}\npeer-key: {}\npeer-kind: member\n",
+            peer(None).origin,
+            allowed_key()
+        )
+    );
 }
 
 /// A stock SSH client for the shell example: the transport is already
