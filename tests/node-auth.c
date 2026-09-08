@@ -41,9 +41,9 @@ static void check(const char *value, int expected) {
 }
 
 int main(void) {
-    /* Fixtures encoded independently with Python's RFC 4648 base64.b32encode. */
-    const char *a = "vkvkvkvkvkvkvkvkvkvkvkvkvkvkvkvkvkvkvkvkvkvkvkvkvkva";
-    const char *b = "xo53xo53xo53xo53xo53xo53xo53xo53xo53xo53xo53xo53xo5q";
+    /* Fixtures encoded independently with Python's base32 encoder and the z-base-32 alphabet. */
+    const char *a = "ikikikikikikikikikikikikikikikikikikikikikikikikikiy";
+    const char *b = "zq75zq75zq75zq75zq75zq75zq75zq75zq75zq75zq75zq75zq7o";
     char list[1100], mutated[53];
     memset(peer_key, 0xaa, sizeof peer_key);
     peer_result = 32;
@@ -107,6 +107,19 @@ int main(void) {
     config = a;
     reported_length = SY_ENOENT;
     assert(!node_is_authorized());
+    /* Regression: the exact node ID from `synch id`, including 8, 9 and 1. */
+    const sy_u8 displayed_key_bytes[32] = {
+        0x42, 0x3d, 0xa3, 0xf9, 0x52, 0xf2, 0x84, 0x74,
+        0xc3, 0xfe, 0xe4, 0xf9, 0x10, 0x26, 0xda, 0x01,
+        0x45, 0xec, 0x31, 0xa4, 0xd0, 0x83, 0x3b, 0x00,
+        0x1e, 0xf8, 0x6d, 0xa8, 0x72, 0x5c, 0xe3, 0xfb,
+    };
+    memcpy(peer_key, displayed_key_bytes, 32);
+    check("ee6486k16kn8jo96huhtyjs4yfn6acpr4nbusyy69bs4oh1hhx7o", 1);
+    check("EE6486K16KN8JO96HUHTYJS4YFN6ACPR4NBUSYY69BS4OH1HHX7O", 1);
+    peer_key[31] ^= 1;
+    check("ee6486k16kn8jo96huhtyjs4yfn6acpr4nbusyy69bs4oh1hhx7o", 0);
+    memset(peer_key, 0xaa, sizeof peer_key);
     peer_result = SY_EPERM;
     check(a, 0);
     return 0;

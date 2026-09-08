@@ -22,17 +22,20 @@ fn diagnostic_key_hex() -> String {
         .collect()
 }
 
-// Independent RFC 4648 fixtures; parse with Iroh as a compatibility check.
+// Parse fixtures through Synchronicity's actual node-ID alphabet.
 fn allowed_key() -> String {
-    let key = "lbtgmztgmztgmztgmztgmztgmztgmztgmztgmztgmztgmztgmzta";
+    let key = "mbugc3ugc3ugc3ugc3ugc3ugc3ugc3ugc3ugc3ugc3ugc3ugc3uy";
     assert_eq!(
-        key.parse::<synch_core::NodeId>().unwrap(),
+        *key.parse::<synch_core::OriginId>()
+            .unwrap()
+            .as_key()
+            .unwrap(),
         peer(None).device_key
     );
     key.into()
 }
 fn alternate_key() -> String {
-    "25njqamcweflpvkl73j4szahhihoc4xt3ktcgjnpaingr5yhkena".into()
+    "ee6486k16kn8jo96huhtyjs4yfn6acpr4nbusyy69bs4oh1hhx7o".into()
 }
 fn allowed_keys() -> String {
     format!("{}, {}", alternate_key(), allowed_key())
@@ -422,7 +425,11 @@ async fn ssh_shell_serves_declared_read_write_sftp() {
     let (client_stream, server_stream) = tokio::io::duplex(256 * 1024);
     let (server_reader, server_writer) = tokio::io::split(server_stream);
     let mut caller = peer(None);
-    caller.device_key = alternate_key().parse().unwrap();
+    caller.device_key = *alternate_key()
+        .parse::<synch_core::OriginId>()
+        .unwrap()
+        .as_key()
+        .unwrap();
     let invocation = harness.invocation(
         &elf,
         DuplexStream::new(server_reader, server_writer),

@@ -7,13 +7,16 @@
 #define NODE_AUTH_CONFIG_BYTES 1024
 
 static int node_base32_digit(char c) {
-    if (c >= 'a' && c <= 'z') return c - 'a';
-    if (c >= 'A' && c <= 'Z') return c - 'A';
-    if (c >= '2' && c <= '7') return c - '2' + 26;
+    const char *alphabet = "ybndrfg8ejkmcpqxot1uwisza345h769";
+    if (c >= 'A' && c <= 'Z') c = c - 'A' + 'a';
+    for (int i = 0; i < 32; ++i) {
+        if (c == alphabet[i]) return i;
+    }
     return -1;
 }
 
-/* Iroh's case-insensitive RFC 4648 BASE32_NOPAD encoding of 32 bytes.
+/* Synchronicity's z-base-32 node IDs, as printed by `synch id`.
+ * Accept uppercase as a convenience, but do not guess alternate alphabets.
  * The final four padding bits must be zero; '=' padding is not accepted. */
 static int node_decode_key(const char *text, sy_u64 len, sy_u8 out[32]) {
     if (len != 52) return 0;

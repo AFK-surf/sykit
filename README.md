@@ -37,13 +37,15 @@ synch socket activate code/whoami.sock
 ```
 
 Connect with `synch socket connect nas:code/whoami.sock` for identity diagnostics.
-Its `peer-key` output is hex; the SSH allowlist below uses base32.
+Its `peer-key` output is hex; the SSH allowlist below uses z-base-32.
 
 ## SSH and SFTP
 
-Set `allowed_node_key` to one or more **52-character, unpadded iroh base32
-node public keys**, separated by commas. Uppercase and lowercase are accepted,
-with optional spaces, tabs or newlines around each key. Quote the value when
+Set `allowed_node_key` to one or more **52-character, unpadded z-base-32
+node public keys**, exactly as printed by `synch id` (alphabet
+`ybndrfg8ejkmcpqxot1uwisza345h769`, not RFC 4648 base32). Separate keys by
+commas. Either case is accepted, with optional spaces, tabs or newlines around
+each key. Quote the value when
 it contains whitespace. Use at most 16 keys and 1023 bytes of configuration.
 Hex, `=` padding, empty entries and malformed keys are rejected. The entire
 list must be valid, even if an earlier key matches the caller.
@@ -58,8 +60,8 @@ synch fetch https://raw.githubusercontent.com/AFK-surf/sykit/main/objects/ssh-sh
 synch socket activate code/ssh.sock --config 'allowed_node_key=FIRST_BASE32_NODE_KEY,SECOND_BASE32_NODE_KEY'
 ```
 
-For a single node, supply just its base32 key without a comma. Existing
-hex-valued activations must be updated to base32 when deploying this version.
+For a single node, supply just its z-base-32 key without a comma. Existing
+hex-valued activations must be updated to z-base-32 when deploying this version.
 
 From an allowed node:
 
