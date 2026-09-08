@@ -14,8 +14,18 @@ static sy_s64 reported_length;
 static sy_s64 peer_result;
 static sy_u8 peer_key[32];
 static const char *peer_origin = "laptop@cluster.example";
+static const char *list_path;
+static const char *file_body;
+static sy_s64 advertised_size;
+static sy_u64 read_chunk = 17, fake_ns, poll_advance_ns;
+static int pending_read, poll_count, open_count, object_closes, stat_closes;
+static int open_error, stat_error, read_error, poll_timeout;
+static const char *file_kind = "file";
 
 sy_s64 sy_config_get(const char *key, sy_u64 key_len, char *out, sy_u64 cap) {
+    if (key_len == strlen("allowlist") && memcmp(key, "allowlist", key_len) == 0) {
+        return list_path ? snprintf(out, (size_t)cap, "%s", list_path) : SY_ENOENT;
+    }
     assert(key_len == strlen("allowed_peers"));
     assert(memcmp(key, "allowed_peers", key_len) == 0);
     if (config) {
@@ -36,6 +46,76 @@ sy_s64 sy_peer_device_key(void *out) {
 }
 sy_s64 sy_ct_eq(const void *a, const void *b, sy_u64 len) {
     return memcmp(a, b, len) == 0;
+}
+
+sy_s64 sy_open(const char *path, sy_u64 length) {
+    ++open_count;
+    assert(length == strlen("code/allowlist.txt"));
+    assert(memcmp(path, "code/allowlist.txt", length) == 0);
+    return open_error ? SY_ENOENT : 42;
+}
+sy_s64 sy_stat(sy_s64 object) {
+    assert(object == 42);
+    return stat_error ? SY_EINVAL : 43;
+}
+sy_s64 sy_json_get(sy_s64 handle, const char *key, sy_u64 length) {
+    assert(handle == 43 && length == 4);
+    if (memcmp(key, "size", 4) == 0) return 44;
+    assert(memcmp(key, "kind", 4) == 0);
+    return 45;
+}
+sy_s64 sy_json_read_i64(sy_s64 handle, void *out, sy_u64 capacity) {
+    assert(handle == 44 && capacity == sizeof advertised_size);
+    memcpy(out, &advertised_size, capacity);
+    return 0;
+}
+sy_s64 sy_json_read_string(sy_s64 handle, char *out, sy_u64 cap) {
+    assert(handle == 45);
+    return snprintf(out, (size_t)cap, "%s", file_kind);
+}
+sy_s64 sy_close(sy_s64 handle) {
+    if (handle == 42) ++object_closes;
+    else if (handle == 43) ++stat_closes;
+    else assert(handle == 44 || handle == 45);
+    return 0;
+}
+sy_u64 sy_monotonic_ns(void) { return fake_ns; }
+sy_s64 sy_poll(struct sy_pollfd *fds, sy_u64 count, sy_s64 timeout) {
+    assert(count == 1 && fds[0].handle == 42 && timeout > 0 && timeout <= 10000);
+    ++poll_count;
+    fake_ns += poll_advance_ns;
+    fds[0].revents = SY_POLL_IN;
+    return poll_timeout ? 0 : 1;
+}
+sy_s64 sy_pread(sy_s64 object, void *out, sy_u64 capacity, sy_u64 offset) {
+    assert(object == 42);
+    if (!pending_read) { pending_read = 1; return SY_EAGAIN; }
+    pending_read = 0;
+    if (read_error) return SY_EINVAL;
+    sy_u64 size = strlen(file_body);
+    if (offset >= size) return 0;
+    sy_u64 amount = size - offset;
+    if (amount > capacity) amount = capacity;
+    if (amount > read_chunk) amount = read_chunk;
+    memcpy(out, file_body + offset, amount);
+    return (sy_s64)amount;
+}
+
+static void prepare_file(const char *body) {
+    config = NULL;
+    reported_length = SY_ENOENT;
+    list_path = "code/allowlist.txt";
+    file_body = body;
+    advertised_size = (sy_s64)strlen(body);
+    file_kind = "file";
+    pending_read = poll_count = open_count = object_closes = stat_closes = 0;
+    fake_ns = poll_advance_ns = 0;
+    open_error = stat_error = read_error = poll_timeout = 0;
+}
+static void check_file(const char *body, int expected) {
+    prepare_file(body);
+    assert(node_is_authorized() == expected);
+    assert(open_count == 1 && object_closes == 1 && stat_closes == 1);
 }
 
 static void check(const char *value, int expected) {
@@ -166,5 +246,46 @@ int main(void) {
     memset(peer_key, 0xaa, sizeof peer_key);
     peer_result = SY_EPERM;
     check(a, 0);
+    peer_result = 32;
+    check_file("laptop@cluster.example\n", 1);
+    assert(poll_count > 0); /* every read goes through SY_EAGAIN and sy_poll */
+    check_file("\n \r\n other@example.com\r\n\tlaptop@cluster.example \r\n", 1);
+    check_file("laptop@cluster.example", 1);
+    check_file("laptop@cluster.example\ninvalid", 0);
+    check_file("laptop@cluster.example,other@example.com\n", 0);
+    check_file("", 0);
+    check_file(" \n\r\n", 0);
+    prepare_file("laptop@cluster.example\n");
+    ++advertised_size;
+    assert(!node_is_authorized()); /* EOF after a match but before advertised size */
+    assert(object_closes == 1);
+    prepare_file("laptop@cluster.example\n");
+    poll_timeout = 1;
+    assert(!node_is_authorized() && object_closes == 1);
+    prepare_file("laptop@cluster.example\n");
+    poll_advance_ns = 6000000000ULL;
+    read_chunk = 1;
+    assert(!node_is_authorized() && object_closes == 1);
+    assert(poll_count == 2); /* total deadline, not a fresh timeout per byte */
+    read_chunk = 17;
+    prepare_file("laptop@cluster.example\n");
+    open_error = 1;
+    assert(!node_is_authorized() && object_closes == 0);
+    prepare_file("laptop@cluster.example\n");
+    stat_error = 1;
+    assert(!node_is_authorized() && object_closes == 1 && stat_closes == 0);
+    prepare_file("laptop@cluster.example\n");
+    read_error = 1;
+    assert(!node_is_authorized() && object_closes == 1);
+    prepare_file("laptop@cluster.example\n");
+    file_kind = "dir";
+    assert(!node_is_authorized() && object_closes == 1);
+    prepare_file("laptop@cluster.example\n");
+    advertised_size = 65537;
+    assert(!node_is_authorized() && poll_count == 0 && object_closes == 1);
+    prepare_file("laptop@cluster.example\n");
+    config = a;
+    reported_length = 52;
+    assert(!node_is_authorized() && open_count == 0); /* ambiguous sources */
     return 0;
 }

@@ -208,7 +208,7 @@ static void collect_status(struct session *s) {
 }
 
 SY_ENTRY sy_s64 entry(void) {
-  /* Gate the authenticated transport identity before any SSH or host effect.
+  /* Gate the authenticated transport identity before starting SSH or a backend.
      Inner SSH none is safe only because this check is mandatory. */
   if (!node_is_authorized()) {
     sy_log(SY_STR("ssh-shell: node authorization denied\n"));

@@ -60,3 +60,13 @@ encoding bits before granting access. Origin rules compare the authenticated
 `sy_peer_origin` value after normalizing the configured name, and therefore
 trust the membership authority to associate that name with a device key.
 Hex and the former `allowed_node_key` setting are not accepted.
+
+`allowlist=<tree path>` selects a newline-delimited file instead of inline
+`allowed_peers`; configuring both is refused. The server reads one selected
+object snapshot in full for each new connection, with limits of 64 KiB,
+1,024 peer entries, 1,023 bytes per line and 10 seconds for range reads. Failures
+and malformed later lines deny access even after a match. Native tests inject
+cold/short reads, timeouts, premature EOF and host errors and check cleanup;
+runtime tests cover large files, rejected policy and revocation on a new
+connection. File writers are trusted to grant SSH access. Existing sessions
+retain their authorization until they end.

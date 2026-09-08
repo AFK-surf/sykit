@@ -37,9 +37,6 @@ fn allowed_key() -> String {
 fn alternate_key() -> String {
     "ee6486k16kn8jo96huhtyjs4yfn6acpr4nbusyy69bs4oh1hhx7o".into()
 }
-fn allowed_keys() -> String {
-    format!("{}, {}", alternate_key(), allowed_key())
-}
 
 #[tokio::test]
 async fn ssh_denies_before_handshake_even_with_spoofed_metadata() {
@@ -163,6 +160,77 @@ async fn origin_rule_authorizes_authenticated_name_across_device_keys() {
             .unwrap();
         assert_eq!(outcome.status, SockStatus::Ok(0));
     }
+}
+
+#[tokio::test]
+async fn tree_allowlist_errors_deny_before_ssh_even_after_a_matching_line() {
+    let mut cases = vec![
+        (None, false),
+        (Some(String::new()), false),
+        (Some("\n \r\n".into()), false),
+        (Some("laptop@cluster.example\ninvalid".into()), false),
+        (Some("laptop@cluster.example\n\0".into()), false),
+        (
+            Some("laptop@cluster.example,other@example.com\n".into()),
+            false,
+        ),
+        (
+            Some(format!("laptop@cluster.example\n{}", " ".repeat(1024))),
+            false,
+        ),
+        (Some("laptop@cluster.example\n".repeat(1025)), false),
+        (
+            Some(format!("laptop@cluster.example\n{}", "\n".repeat(65536))),
+            false,
+        ),
+        (Some("laptop@cluster.example\n".into()), true), // both sources configured
+    ];
+    for (body, both_sources) in cases.drain(..) {
+        let files: Vec<(&str, &str)> = body
+            .as_deref()
+            .map(|body| vec![("code/allowlist.txt", body)])
+            .unwrap_or_default();
+        let harness = Harness::with_tree(&files);
+        let mut config = vec![("allowlist".into(), "code/allowlist.txt".into())];
+        if both_sources {
+            config.push(("allowed_peers".into(), allowed_key()));
+        }
+        let (status, output) = exchange(
+            &harness,
+            &object("ssh-shell"),
+            b"",
+            EffectivePolicy {
+                config,
+                ..EffectivePolicy::default()
+            },
+            peer(None),
+            vec![
+                ("allowlist".into(), "code/some-other-file".into()),
+                ("allowed_peers".into(), allowed_key()),
+            ],
+        )
+        .await;
+        assert_eq!(status, SockStatus::Ok(1));
+        assert!(output.is_empty());
+    }
+    let harness = Harness::with_tree_and_refused(
+        &[("code/allowlist.txt", "laptop@cluster.example\n")],
+        &["code/allowlist.txt"],
+    );
+    let (status, output) = exchange(
+        &harness,
+        &object("ssh-shell"),
+        b"",
+        EffectivePolicy {
+            config: vec![("allowlist".into(), "code/allowlist.txt".into())],
+            ..EffectivePolicy::default()
+        },
+        peer(None),
+        vec![],
+    )
+    .await;
+    assert_eq!(status, SockStatus::Ok(1));
+    assert!(output.is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -489,7 +557,16 @@ async fn ssh_shell_serves_declared_read_write_sftp() {
     use std::time::Duration;
 
     let elf = object("ssh-shell");
+    // Fill the file to the 1024-peer bound and match only at the end, across
+    // many cold range reads. Blank lines, CRLF and final unterminated lines work.
+    let allowlist = format!(
+        "\r\n{}{}\r\n{}",
+        "other@example.com\n".repeat(1022),
+        allowed_key(),
+        alternate_key()
+    );
     let harness = Harness::with_tree(&[
+        ("code/allowlist.txt", &allowlist),
         ("files/hello.txt", "hello over sftp"),
         ("secret.txt", "outside scope"),
     ]);
@@ -504,7 +581,7 @@ async fn ssh_shell_serves_declared_read_write_sftp() {
 
     let policy = EffectivePolicy::granted(
         &declaration,
-        vec![("allowed_peers".into(), allowed_keys())],
+        vec![("allowlist".into(), "code/allowlist.txt".into())],
         None,
         64,
     );
@@ -523,7 +600,8 @@ async fn ssh_shell_serves_declared_read_write_sftp() {
         caller,
         vec![],
     );
-    let run = tokio::spawn(async move { harness.pool.run(invocation).await.unwrap() });
+    let pool = harness.pool.clone();
+    let run = tokio::spawn(async move { pool.run(invocation).await.unwrap() });
 
     let mut client = russh::client::connect_stream(
         Arc::new(russh::client::Config::default()),
@@ -654,4 +732,31 @@ async fn ssh_shell_serves_declared_read_write_sftp() {
         .expect("the invocation ended with the connection")
         .unwrap();
     assert_eq!(outcome.status, SockStatus::Ok(0));
+    // Every new connection selects the file again; revocation needs no rebuild.
+    harness
+        .tree
+        .written
+        .lock()
+        .unwrap()
+        .insert("code/allowlist.txt".into(), b"other@example.com\n".to_vec());
+    let mut revoked_peer = peer(None);
+    revoked_peer.device_key = *alternate_key()
+        .parse::<synch_core::OriginId>()
+        .unwrap()
+        .as_key()
+        .unwrap();
+    let (status, output) = exchange(
+        &harness,
+        &elf,
+        b"",
+        EffectivePolicy {
+            config: vec![("allowlist".into(), "code/allowlist.txt".into())],
+            ..EffectivePolicy::default()
+        },
+        revoked_peer,
+        vec![],
+    )
+    .await;
+    assert_eq!(status, SockStatus::Ok(1));
+    assert!(output.is_empty());
 }

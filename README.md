@@ -69,6 +69,37 @@ for that name, including key rotation. A public-key rule pins one device key
 regardless of its origin. Verify the peers and the origin's membership authority
 before granting shell access.
 
+For a tree-backed allowlist, create a text file with one origin or public key
+per line, for example:
+
+```text
+laptop@example.com
+workstation@example.com
+BASE32_NODE_PUBLIC_KEY
+```
+
+Publish it into the serving node's tree and configure its path:
+
+```sh
+synch put ssh-allowlist.txt code/ssh-allowlist.txt
+synch socket activate code/ssh.sock --config allowlist=code/ssh-allowlist.txt
+```
+
+Configure exactly one of `allowed_peers` or `allowlist`. With `allowlist`, the
+server reads the selected tree file for every new connection; changing its
+contents requires no socket rebuild. Each connection reads one object snapshot.
+Existing SSH sessions are not revoked by later changes. Protect writes to this
+path: anyone who can change this file can grant shell access as the daemon's
+OS account. Consider this when selecting a path writable through SFTP.
+
+Files may contain up to 64 KiB and 1,024 nonblank peer entries, with at most
+1,023 bytes per line before the LF. CRLF, blank lines, surrounding whitespace
+and a final line without a newline are supported. Comments and comma-separated
+entries are not supported in files. The entire file must be valid; missing,
+unreadable, oversized, malformed or incompletely read files deny access.
+Reading has a 10-second total deadline. Both source settings together also
+deny access; a failed file read never falls back to inline peers.
+
 From an allowed node:
 
 ```sh
