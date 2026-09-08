@@ -88,7 +88,8 @@ to `20260901T000000Z`. ARM hosts need amd64 emulation; Docker Desktop includes
 it. Outputs target little-endian BPF v3 and work on supported Synchronicity
 hosts regardless of their CPU architecture. Compilation uses clang 18, fixed
 paths and locale, no debug data, and 16 KiB stack frames. Builds compile only
-checked-in inputs and extract objects from a scratch image.
+checked-in inputs and extract `/artifacts` from the exact image produced by
+that build. The test script requires a C compiler and Python 3.
 
 `--check` rebuilds into a temporary directory and compares every byte and the
 complete output file set with `objects/`. Commit changed `.c`, headers, `.o`
@@ -97,3 +98,6 @@ a trusted source. CI checks authentication and artifact reproducibility.
 
 For runtime integration tests against a local Synchronicity checkout, see
 `tests/runtime.rs` and `scripts/test-runtime.sh`.
+
+See [SECURITY.md](SECURITY.md) for the security review, regression coverage and
+trust assumptions.

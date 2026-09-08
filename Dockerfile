@@ -15,4 +15,4 @@ COPY scripts/compile.sh scripts/compile.sh
 RUN sh scripts/compile.sh /out
 
 FROM --platform=linux/amd64 scratch AS artifacts
-COPY --from=build /out/ /
+COPY --from=build /out/ /artifacts/

@@ -359,7 +359,10 @@ async fn ssh_shell_serves_declared_read_write_sftp() {
     use std::time::Duration;
 
     let elf = object("ssh-shell");
-    let harness = Harness::with_tree(&[("files/hello.txt", "hello over sftp")]);
+    let harness = Harness::with_tree(&[
+        ("files/hello.txt", "hello over sftp"),
+        ("secret.txt", "outside scope"),
+    ]);
     let declaration =
         synch_sock::manifest::manifest_declaration(&elf).expect("the manifest parsed");
     assert_eq!(declaration.file_transfers.len(), 1);
@@ -398,10 +401,66 @@ async fn ssh_shell_serves_declared_read_write_sftp() {
         .await
         .unwrap()
         .success());
-    let channel = client
-        .channel_open_session()
+    // Recover the slot after abandonment both before and after PTY allocation.
+    let mut channel = client.channel_open_session().await.unwrap();
+    for with_pty in [false, true] {
+        if with_pty {
+            channel
+                .request_pty(true, "xterm", 80, 24, 0, 0, &[])
+                .await
+                .unwrap();
+            assert!(matches!(
+                channel.wait().await,
+                Some(russh::ChannelMsg::Success)
+            ));
+        }
+        channel.close().await.unwrap();
+        drop(channel);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        channel = loop {
+            match client.channel_open_session().await {
+                Ok(channel) => break channel,
+                Err(_) if tokio::time::Instant::now() < deadline => {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+                Err(error) => panic!("abandoned channel retained the session slot: {error}"),
+            }
+        };
+    }
+    channel
+        .request_subsystem(true, "sftp\0unexpected")
         .await
-        .expect("a session channel");
+        .unwrap();
+    assert!(
+        matches!(
+            tokio::time::timeout(Duration::from_secs(5), channel.wait())
+                .await
+                .unwrap(),
+            Some(russh::ChannelMsg::Failure)
+        ),
+        "only the exact subsystem name may be accepted"
+    );
+    channel.exec(true, "printf unwanted").await.unwrap();
+    assert!(matches!(
+        channel.wait().await,
+        Some(russh::ChannelMsg::Failure)
+    ));
+    channel
+        .set_env(true, "SYKIT_TEST", "untrusted")
+        .await
+        .unwrap();
+    assert!(matches!(
+        channel.wait().await,
+        Some(russh::ChannelMsg::Failure)
+    ));
+    assert!(client
+        .channel_open_direct_tcpip("127.0.0.1", 9, "127.0.0.1", 12345)
+        .await
+        .is_err());
+    assert!(
+        client.channel_open_session().await.is_err(),
+        "only one active session is allowed"
+    );
     channel
         .request_subsystem(true, "sftp")
         .await
@@ -410,6 +469,22 @@ async fn ssh_shell_serves_declared_read_write_sftp() {
         .await
         .expect("the SFTP version exchange completed");
 
+    for path in ["../secret.txt", "/../secret.txt", "sub/../../secret.txt"] {
+        assert!(
+            sftp.read(path).await.is_err(),
+            "escaped the read scope: {path}"
+        );
+        assert!(
+            sftp.create(path).await.is_err(),
+            "escaped the write scope: {path}"
+        );
+        assert!(
+            sftp.remove_file(path).await.is_err(),
+            "escaped the delete scope: {path}"
+        );
+    }
+    assert!(harness.tree.written.lock().unwrap().is_empty());
+    assert!(harness.tree.deleted.lock().unwrap().is_empty());
     assert_eq!(sftp.read("hello.txt").await.unwrap(), b"hello over sftp");
     let mut upload = sftp.create("upload.txt").await.expect("a writable file");
     upload

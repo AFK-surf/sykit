@@ -7,7 +7,8 @@ The SDK and initial programs are copied/adapted from Synchronicity commit
 - `crates/synch-sock/examples/{echo,whoami,ssh-shell}.c` → `src/`.
 
 `ssh-shell` adds mandatory activation-config node-key authorization before SSH
-startup. `whoami` checks host errors and output lengths, propagates write
+startup, length-aware SSH token comparisons and abandoned-session cleanup.
+`whoami` checks host errors and output lengths, propagates write
 failures, and omits caller-supplied metadata. Echo retains upstream behavior.
 
 The Docker toolchain follows upstream's clang flags: BPF v3, 16 KiB frames,

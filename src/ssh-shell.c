@@ -35,9 +35,15 @@ SY_MANIFEST("{\"manifest\":1,\"name\":\"ssh-shell\",\"max_streams\":4,"
             "\"tree_writes\":[{\"id\":1,\"prefix\":\"" SFTP_SCOPE "\","
             "\"allow\":[\"create\",\"replace\",\"delete\"]}]}");
 
-static int str_is(const char *value, const char *want) {
-  sy_u64 len = sy_strlen(want);
-  return sy_strlen(value) == len && sy_memcmp(value, want, len) == 0;
+/* JSON strings are length-delimited; strlen would accept "sftp\0suffix".
+ * Compare the reported length as well as the bytes, rejecting truncation. */
+static int event_string_is(sy_s64 event, const char *field, const char *want) {
+    char value[32];
+    sy_s64 got = sy_json_get_string(event, field, sy_strlen(field), value,
+                                   sizeof value);
+    sy_u64 len = sy_strlen(want);
+    return got >= 0 && (sy_u64)got < sizeof value && (sy_u64)got == len &&
+           sy_memcmp(value, want, len) == 0;
 }
 
 /* A request that asked for a reply gets one; one that did not is finished. */
@@ -70,9 +76,7 @@ static sy_s64 handle_open(sy_s64 event, sy_u64 id, struct session *s) {
      has ended frees the slot for the next open, so sequential logins on one
      connection work (§7.3). §15.1's slot array is the shape for concurrent
      channels. */
-  char type[32] = {0};
-  sy_json_get_string(event, SY_STR("channel_type"), type, sizeof type);
-  if (s->channel >= 0 || !str_is(type, "session"))
+  if (s->channel >= 0 || !event_string_is(event, "channel_type", "session"))
     return sy_ssh_channel_reject(id, SY_STR("administratively_prohibited"));
   sy_s64 channel = sy_ssh_channel_accept(id);
   if (channel < 0) return channel;
@@ -82,13 +86,10 @@ static sy_s64 handle_open(sy_s64 event, sy_u64 id, struct session *s) {
 
 static sy_s64 handle_request(sy_s64 event, sy_u64 id, struct session *s) {
   sy_s64 fd = -1;
-  sy_json_get_i64(event, SY_STR("fd"), &fd);
-  if (fd != s->channel) return finish(event, id, 0);
+  if (sy_json_get_i64(event, SY_STR("fd"), &fd) < 0 || fd < 0 ||
+      fd != s->channel) return finish(event, id, 0);
 
-  char type[32] = {0};
-  sy_json_get_string(event, SY_STR("request_type"), type, sizeof type);
-
-  if (str_is(type, "pty-req")) {
+  if (event_string_is(event, "request_type", "pty-req")) {
     if (s->pty >= 0 || s->sftp >= 0) return finish(event, id, 0);
     sy_s64 spec = sy_ssh_pty_spec(id);
     if (spec < 0) return finish(event, id, 0);
@@ -99,7 +100,7 @@ static sy_s64 handle_request(sy_s64 event, sy_u64 id, struct session *s) {
     return finish(event, id, 1);
   }
 
-  if (str_is(type, "shell")) {
+  if (event_string_is(event, "request_type", "shell")) {
     if (s->pty < 0 || s->sftp >= 0 || s->process >= 0)
       return finish(event, id, 0);
     sy_s64 process = sy_process_spawn_pty(SHELL_CAPABILITY, s->pty);
@@ -108,7 +109,7 @@ static sy_s64 handle_request(sy_s64 event, sy_u64 id, struct session *s) {
     return finish(event, id, 1);
   }
 
-  if (str_is(type, "window-change")) {
+  if (event_string_is(event, "request_type", "window-change")) {
     if (s->pty < 0) return finish(event, id, 0);
     sy_s64 columns = 0, rows = 0, width = 0, height = 0;
     sy_json_get_i64(event, SY_STR("columns"), &columns);
@@ -120,7 +121,7 @@ static sy_s64 handle_request(sy_s64 event, sy_u64 id, struct session *s) {
     return finish(event, id, resized < 0 ? 0 : 1);
   }
 
-  if (str_is(type, "signal")) {
+  if (event_string_is(event, "request_type", "signal")) {
     char name[32] = {0};
     sy_s64 len = sy_json_get_string(event, SY_STR("signal"), name, sizeof name);
     sy_s64 sent = s->process < 0 || len < 0 || len >= (sy_s64)sizeof name
@@ -129,12 +130,9 @@ static sy_s64 handle_request(sy_s64 event, sy_u64 id, struct session *s) {
     return finish(event, id, sent < 0 ? 0 : 1);
   }
 
-  if (str_is(type, "subsystem")) {
-    char subsystem[32] = {0};
-    sy_s64 len = sy_json_get_string(event, SY_STR("subsystem"), subsystem,
-                                    sizeof subsystem);
-    if (s->pty >= 0 || s->sftp >= 0 || s->process >= 0 || len < 0 ||
-        len >= (sy_s64)sizeof subsystem || !str_is(subsystem, "sftp"))
+  if (event_string_is(event, "request_type", "subsystem")) {
+    if (s->pty >= 0 || s->sftp >= 0 || s->process >= 0 ||
+        !event_string_is(event, "subsystem", "sftp"))
       return finish(event, id, 0);
     sy_s64 backend = sy_sftp_open(SFTP_CAPABILITY);
     if (backend < 0) return finish(event, id, 0);
@@ -255,24 +253,34 @@ SY_ENTRY sy_s64 entry(void) {
     if (s.process >= 0 && !s.have_status)
       fds[nfds++] = (struct sy_pollfd){s.process, SY_POLL_IN, 0};
 
+    /* An abandoned channel with no backend has no useful input to drain.
+       Watch its receive EOF so it cannot retain the only session slot. */
+    sy_u64 unstarted_at = 0;
+    if (s.channel >= 0 && s.process < 0 && s.sftp < 0) {
+      unstarted_at = nfds;
+      fds[nfds++] = (struct sy_pollfd){s.channel, SY_POLL_RDHUP, 0};
+    }
+
     if (sy_poll(fds, nfds, -1) <= 0) break; /* idle deadline, or all quiet */
 
     if (fds[0].revents & SY_POLL_IN) {
       sy_s64 event;
       while ((event = sy_ssh_next(SY_SELF)) > 0) {
-        char kind[32] = {0};
         sy_s64 id = 0;
-        sy_json_get_string(event, SY_STR("kind"), kind, sizeof kind);
-        sy_json_get_i64(event, SY_STR("id"), &id);
+        if (sy_json_get_i64(event, SY_STR("id"), &id) < 0 || id <= 0) {
+          sy_close(event);
+          close_session(&s);
+          return 2;
+        }
 
         sy_s64 handled = 0;
-        if (str_is(kind, "auth_none")) {
+        if (event_string_is(event, "kind", "auth_none")) {
           sy_s64 accept = sy_json_parse(SY_STR("{\"result\":\"accept\"}"));
           handled = accept < 0 ? accept : sy_ssh_auth_reply((sy_u64)id, accept);
           if (accept >= 0) sy_close(accept);
-        } else if (str_is(kind, "channel_open")) {
+        } else if (event_string_is(event, "kind", "channel_open")) {
           handled = handle_open(event, (sy_u64)id, &s);
-        } else if (str_is(kind, "channel_request")) {
+        } else if (event_string_is(event, "kind", "channel_request")) {
           handled = handle_request(event, (sy_u64)id, &s);
         } else {
           handled = sy_ssh_event_done((sy_u64)id); /* authenticated, lanes */
@@ -283,6 +291,16 @@ SY_ENTRY sy_s64 entry(void) {
           return 2;
         }
       }
+    }
+
+    /* Dispatch queued shell/SFTP requests first: clients may pipeline a
+       backend request and EOF, which must still let that backend start. */
+    if (unstarted_at && s.process < 0 && s.sftp < 0 &&
+        s.channel == fds[unstarted_at].handle &&
+        (fds[unstarted_at].revents &
+         (SY_POLL_RDHUP | SY_POLL_HUP | SY_POLL_ERR))) {
+      close_session(&s);
+      continue;
     }
 
     if (s.channel >= 0 && (s.pty >= 0 || s.sftp >= 0)) move_terminal(&s);
