@@ -760,3 +760,183 @@ async fn ssh_shell_serves_declared_read_write_sftp() {
     assert_eq!(status, SockStatus::Ok(1));
     assert!(output.is_empty());
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn tcp_proxy_gates_dials_and_preserves_both_half_close_orders() {
+    use std::time::Duration;
+    let elf = object("tcp-proxy");
+    let declaration = synch_sock::manifest::manifest_declaration(&elf).unwrap();
+    assert_eq!(declaration.name, "tcp-proxy");
+    assert_eq!(declaration.egress, vec!["127.0.0.1"]);
+    assert_eq!(declaration.max_streams, Some(32));
+    let listener = Arc::new(tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap());
+    let port = listener.local_addr().unwrap().port().to_string();
+    let allowed = ("allowed_peers".to_string(), allowed_key());
+    let target = ("upstream_port".to_string(), port.clone());
+    let mut refusals = vec![
+        (vec![target.clone()], 1),
+        (
+            vec![target.clone(), ("allowed_peers".into(), alternate_key())],
+            1,
+        ),
+        (
+            vec![
+                target.clone(),
+                ("allowed_peers".into(), "other@example.com".into()),
+            ],
+            1,
+        ),
+        (
+            vec![target.clone(), ("allowlist".into(), "code/missing".into())],
+            1,
+        ),
+        (
+            vec![
+                target.clone(),
+                allowed.clone(),
+                ("allowlist".into(), "code/missing".into()),
+            ],
+            1,
+        ),
+        (vec![allowed.clone()], 2),
+    ];
+    for invalid in [
+        "", "0", "65536", "999999", "-1", "+80", " 80", "80x", "80\n",
+    ] {
+        refusals.push((
+            vec![allowed.clone(), ("upstream_port".into(), invalid.into())],
+            2,
+        ));
+    }
+    for (config, code) in refusals {
+        let policy = EffectivePolicy::granted(&declaration, config, None, 32);
+        let (status, output) = exchange(
+            &Harness::new(),
+            &elf,
+            b"untrusted input",
+            policy,
+            peer(None),
+            vec![
+                ("allowed_peers".into(), allowed_key()),
+                ("origin".into(), "other@example.com".into()),
+                ("upstream_port".into(), port.clone()),
+            ],
+        )
+        .await;
+        assert_eq!(status, SockStatus::Ok(code));
+        assert!(output.is_empty());
+    }
+    // Even an authorized caller cannot bypass the runtime's egress capability.
+    let (status, _) = exchange(
+        &Harness::new(),
+        &elf,
+        b"",
+        EffectivePolicy {
+            config: vec![allowed.clone(), target.clone()],
+            ..EffectivePolicy::default()
+        },
+        peer(None),
+        vec![],
+    )
+    .await;
+    assert_eq!(status, SockStatus::Ok(3));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), listener.accept())
+            .await
+            .is_err(),
+        "denied or misconfigured invocations must not connect upstream"
+    );
+
+    let request: Vec<u8> = (0..96 * 1024).map(|i| (i % 251) as u8).collect();
+    let response: Vec<u8> = (0..128 * 1024).map(|i| (i % 241) as u8).collect();
+    for upstream_fin_first in [false, true] {
+        let upstream_listener = listener.clone();
+        let reply = response.clone();
+        let upstream = tokio::spawn(async move {
+            let (socket, _) = upstream_listener.accept().await.unwrap();
+            let (mut reader, mut writer) = tokio::io::split(socket);
+            let mut received = Vec::new();
+            if upstream_fin_first {
+                writer.write_all(&reply).await.unwrap();
+                writer.shutdown().await.unwrap();
+                reader.read_to_end(&mut received).await.unwrap();
+            } else {
+                reader.read_to_end(&mut received).await.unwrap();
+                writer.write_all(&reply).await.unwrap();
+                writer.shutdown().await.unwrap();
+            }
+            received
+        });
+        let harness = Harness::with_tree_and_limits(
+            &[("code/proxy-allowlist.txt", "laptop@cluster.example\n")],
+            Limits {
+                ring_bytes: 4096,
+                ..Limits::default()
+            },
+        );
+        let auth = if upstream_fin_first {
+            ("allowlist".into(), "code/proxy-allowlist.txt".into())
+        } else {
+            allowed.clone()
+        };
+        let policy = EffectivePolicy::granted(&declaration, vec![auth, target.clone()], None, 32);
+        let (mine, theirs) = tokio::io::duplex(1024);
+        let (server_reader, server_writer) = tokio::io::split(theirs);
+        let invocation = harness.invocation(
+            &elf,
+            DuplexStream::new(server_reader, server_writer),
+            policy,
+            peer(None),
+            vec![
+                ("upstream_port".into(), "1".into()),
+                ("upstream_host".into(), "untrusted.example".into()),
+            ],
+        );
+        let (mut reader, mut writer) = tokio::io::split(mine);
+        let (eof_sent, eof_seen) = tokio::sync::oneshot::channel();
+        let sending = request.clone();
+        let sender = tokio::spawn(async move {
+            // Send nothing until the proxy forwards upstream EOF in this case.
+            // Closing the whole invocation on that first EOF would lose this data.
+            if upstream_fin_first {
+                eof_seen.await.unwrap();
+            }
+            writer.write_all(&sending).await.unwrap();
+            writer.shutdown().await.unwrap();
+        });
+        let receiver = tokio::spawn(async move {
+            let mut received = Vec::new();
+            reader.read_to_end(&mut received).await.unwrap();
+            let _ = eof_sent.send(());
+            received
+        });
+        let (outcome, sent, received, upstream_received) =
+            tokio::time::timeout(Duration::from_secs(10), async {
+                tokio::join!(harness.pool.run(invocation), sender, receiver, upstream)
+            })
+            .await
+            .expect("proxy must finish after both directions reach EOF");
+        sent.unwrap();
+        assert_eq!(received.unwrap(), response);
+        assert_eq!(upstream_received.unwrap(), request);
+        let outcome = outcome.unwrap();
+        assert_eq!(outcome.status, SockStatus::Ok(0));
+        assert_eq!(
+            (outcome.bytes_in, outcome.bytes_out),
+            (request.len() as u64, response.len() as u64)
+        );
+    }
+    drop(listener);
+    let policy = EffectivePolicy::granted(&declaration, vec![allowed, target], None, 32);
+    let (status, _) = tokio::time::timeout(
+        Duration::from_secs(5),
+        exchange(&Harness::new(), &elf, b"data", policy, peer(None), vec![]),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        status,
+        SockStatus::Ok(3),
+        "asynchronous connect failures must report failure"
+    );
+}

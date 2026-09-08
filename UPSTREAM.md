@@ -5,12 +5,15 @@ The SDK and initial programs are copied/adapted from Synchronicity commit
 
 - `crates/synch-sock/sdk/synch.h` → `include/synch.h` (unmodified).
 - `crates/synch-sock/examples/{echo,whoami,ssh-shell}.c` → `src/`.
+- `crates/synch-sock/examples/splice-proxy.c` → `src/tcp-proxy.c`.
 
 `ssh-shell` adds mandatory inline or tree-backed origin/public-key authorization
 before SSH startup, length-aware SSH token comparisons and abandoned-session
 cleanup.
 `whoami` checks host errors and output lengths, propagates write
 failures, and omits caller-supplied metadata. Echo retains upstream behavior.
+`tcp-proxy` adds the shared authorization gate, an explicit activation-config
+port on a manifest-declared loopback host, and nonzero network-failure exits.
 
 The Docker toolchain follows upstream's clang flags: BPF v3, 16 KiB frames,
 and raised normal/cold inline thresholds so local helpers stay in the entry

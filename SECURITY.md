@@ -70,3 +70,12 @@ cold/short reads, timeouts, premature EOF and host errors and check cleanup;
 runtime tests cover large files, rejected policy and revocation on a new
 connection. File writers are trusted to grant SSH access. Existing sessions
 retain their authorization until they end.
+
+The TCP proxy uses the same shared authorization function before opening its
+upstream. The shipped manifest permits any TCP port on literal `127.0.0.1`;
+operator-controlled `upstream_port` selects one port, with strict decimal/range
+validation. Neither upstream selection nor authorization reads caller metadata.
+Tests run the committed object against loopback TCP to check denied dials,
+invalid configuration, host egress enforcement, backpressure, both half-close
+orders and asynchronous connection failure. Local listener clients inherit the
+forwarding node's identity and receive the selected service's protocol access.

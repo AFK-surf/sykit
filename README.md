@@ -8,6 +8,7 @@ them. These run inside Synchronicity's socket runtime, not the Linux kernel.
 | --- | --- | --- |
 | `echo` | Echoes binary streams with backpressure; 30-second idle timeout | Any caller able to connect; 16 concurrent streams |
 | `whoami` | Prints authenticated origin, device key and peer kind, then closes | Any caller able to connect; 8 concurrent streams |
+| `tcp-proxy` | Bidirectional TCP forwarding to `127.0.0.1` on a configured port | Same peer allowlist as SSH; 32 concurrent connections |
 | `ssh-shell` | Interactive `/bin/bash` with PTY; read/write SFTP under `files` | Configured origins or node public keys; 4 concurrent connections, one session per connection |
 
 Built against the SDK revision in [UPSTREAM.md](UPSTREAM.md). Review the
@@ -125,6 +126,47 @@ review the resulting manifest. Do not grant untrusted callers write access to
 an activated socket path: replacing its bytes deploys a new program immediately.
 Activation configuration stays on the serving node; it is not embedded in the
 published object.
+
+## TCP reverse proxy
+
+`tcp-proxy` forwards an authenticated Synchronicity stream to a TCP service on
+the serving node. It uses the same `allowed_peers` or tree-backed `allowlist`
+settings described above, and checks authorization before connecting upstream.
+
+```sh
+synch fetch https://raw.githubusercontent.com/AFK-surf/sykit/main/objects/tcp-proxy.o code/tcp-proxy.sock
+synch socket activate code/tcp-proxy.sock --config 'allowed_peers=laptop@example.com' --config upstream_port=8080
+```
+
+Or use a tree allowlist:
+
+```sh
+synch socket activate code/tcp-proxy.sock --config allowlist=code/tcp-allowlist.txt --config upstream_port=8080
+```
+
+From an allowed node, expose the service to local applications:
+
+```sh
+synch socket connect nas:code/tcp-proxy.sock --listen 127.0.0.1:18080
+```
+
+For an HTTP service, open `http://127.0.0.1:18080`. The proxy carries arbitrary
+TCP bytes; it does not terminate TLS, interpret HTTP, or send a PROXY-protocol
+header. Applications using the local listener share the forwarding node's
+identity. The two stream directions drain independently, so a half-close does
+not truncate a pending reply.
+
+`upstream_port` is required and must be decimal 1–65535. The committed object
+pins its upstream host to `127.0.0.1`; its manifest declares that host with all
+ports permitted, while activation config selects one port. Caller metadata and
+payload cannot override either. To use a different host, change `UPSTREAM_HOST`
+in `src/tcp-proxy.c`, rebuild, and review its changed egress declaration.
+Allowlisted nodes receive full protocol access to the selected service, so
+protect the activation config, socket path and any allowlist file.
+
+The runtime's idle and resource limits apply. Program exit codes are 0 for
+clean completion, 1 for denied authorization, 2 for invalid/missing port config,
+and 3 for connection or forwarding failure.
 
 ## Rebuild and verify
 
