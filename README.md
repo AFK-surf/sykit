@@ -10,19 +10,16 @@ them. These run inside Synchronicity's socket runtime, not the Linux kernel.
 | `whoami` | Prints authenticated origin, device key and peer kind | Any caller able to connect; 8 concurrent streams |
 | `ssh-shell` | Interactive `/bin/bash` with PTY; read/write SFTP under `files` | One configured node public key; 4 concurrent connections, one session per connection |
 
-Built against the SDK revision in [UPSTREAM.md](UPSTREAM.md). On the serving
-node, inspect objects before activating them to check runtime compatibility and
-review capabilities. Existing Synchronicity membership/delegation checks still
-apply to every connection.
+Built against the SDK revision in [UPSTREAM.md](UPSTREAM.md). Review the
+capabilities shown when activating a socket. Existing Synchronicity
+membership/delegation checks still apply to every connection.
 
 ## Deploy
 
-Run on the serving node (adjust the local space directory):
+Run on the serving node, using an existing space such as `code`:
 
 ```sh
-(cd objects && sha256sum -c SHA256SUMS)
-synch socket inspect objects/echo.o
-cp objects/echo.o ~/synchronicity/code/echo.sock
+synch fetch https://raw.githubusercontent.com/AFK-surf/sykit/main/objects/echo.o code/echo.sock
 synch socket activate code/echo.sock
 ```
 
@@ -32,8 +29,15 @@ From a connected node:
 printf 'hello\n' | synch socket connect nas:code/echo.sock
 ```
 
-Deploy `whoami.o` the same way to inspect the connecting node's authenticated
-`peer-key`. Verify that node independently before using its key for SSH access.
+To inspect a connecting node's authenticated `peer-key`, deploy `whoami`:
+
+```sh
+synch fetch https://raw.githubusercontent.com/AFK-surf/sykit/main/objects/whoami.o code/whoami.sock
+synch socket activate code/whoami.sock
+```
+
+Connect with `synch socket connect nas:code/whoami.sock`. Verify that node
+independently before using its key for SSH access.
 
 ## SSH and SFTP
 
@@ -43,8 +47,7 @@ connection metadata. Uppercase and lowercase hex are accepted. Missing,
 malformed, or mismatched keys reject the connection before SSH starts.
 
 ```sh
-synch socket inspect objects/ssh-shell.o
-cp objects/ssh-shell.o ~/synchronicity/code/ssh.sock
+synch fetch https://raw.githubusercontent.com/AFK-surf/sykit/main/objects/ssh-shell.o code/ssh.sock
 synch socket activate code/ssh.sock --config allowed_node_key=YOUR_64_HEX_NODE_PUBLIC_KEY
 ```
 
