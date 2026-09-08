@@ -6,8 +6,8 @@ The SDK and initial programs are copied/adapted from Synchronicity commit
 - `crates/synch-sock/sdk/synch.h` → `include/synch.h` (unmodified).
 - `crates/synch-sock/examples/{echo,whoami,ssh-shell}.c` → `src/`.
 
-`ssh-shell` adds mandatory activation-config node-key authorization before SSH
-startup, length-aware SSH token comparisons and abandoned-session cleanup.
+`ssh-shell` adds mandatory activation-config base32 node-key allowlist authorization before
+SSH startup, length-aware SSH token comparisons and abandoned-session cleanup.
 `whoami` checks host errors and output lengths, propagates write
 failures, and omits caller-supplied metadata. Echo retains upstream behavior.
 

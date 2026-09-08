@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <stdio.h>
 #include <string.h>
 #define memcpy sdk_memcpy
 #define memset sdk_memset
@@ -33,34 +34,80 @@ sy_s64 sy_ct_eq(const void *a, const void *b, sy_u64 len) {
     return memcmp(a, b, len) == 0;
 }
 
+static void check(const char *value, int expected) {
+    config = value;
+    reported_length = (sy_s64)strlen(value);
+    assert(node_is_authorized() == expected);
+}
+
 int main(void) {
-    char key[66];
-    memset(key, 'a', 64);
-    key[64] = 0;
+    /* Fixtures encoded independently with Python's RFC 4648 base64.b32encode. */
+    const char *a = "vkvkvkvkvkvkvkvkvkvkvkvkvkvkvkvkvkvkvkvkvkvkvkvkvkva";
+    const char *b = "xo53xo53xo53xo53xo53xo53xo53xo53xo53xo53xo53xo53xo5q";
+    char list[1100], mutated[53];
     memset(peer_key, 0xaa, sizeof peer_key);
-    config = key;
-    reported_length = 64;
-    assert(node_is_authorized());
-    memset(key, 'A', 64);
-    assert(node_is_authorized());
-    peer_key[31] ^= 1;
-    assert(!node_is_authorized());
-    peer_key[31] ^= 1;
-    peer_result = SY_EPERM;
-    assert(!node_is_authorized());
     peer_result = 32;
-    for (int i = 0; i < 64; ++i) {
-        key[i] = 'g';
-        assert(!node_is_authorized());
-        key[i] = 'A';
+    check(a, 1);
+    for (int i = 0; i < 52; ++i) {
+        char c = a[i];
+        mutated[i] = c >= 'a' && c <= 'z' ? c - 'a' + 'A' : c;
     }
-    key[10] = 0;
+    mutated[52] = 0;
+    check(mutated, 1);
+    check(b, 0);
+    snprintf(list, sizeof list, " %s,\t%s\r\n", b, a);
+    check(list, 1);
+    snprintf(list, sizeof list, "%s,%s", a, b);
+    memset(peer_key, 0xbb, sizeof peer_key);
+    check(list, 1); /* the second configured node is independently allowed */
+    memset(peer_key, 0xcc, sizeof peer_key);
+    check(list, 0);
+    memset(peer_key, 0xaa, sizeof peer_key);
+    snprintf(list, sizeof list, "%s,invalid", a);
+    check(list, 0); /* a match cannot hide malformed later policy */
+    snprintf(list, sizeof list, "%s,", a);
+    check(list, 0);
+    snprintf(list, sizeof list, ",%s", a);
+    check(list, 0);
+    snprintf(list, sizeof list, "%s,,%s", a, b);
+    check(list, 0);
+    for (int i = 0; i < 52; ++i) {
+        memcpy(mutated, a, 53);
+        mutated[i] = '0';
+        check(mutated, 0);
+    }
+    memcpy(mutated, a, 53);
+    mutated[51] = 'b'; /* same decoded bytes, nonzero unused bits */
+    check(mutated, 0);
+    check("", 0);
+    check(" \t\n", 0);
+    memset(list, 'a', 64);
+    list[64] = 0;
+    check(list, 0); /* hex is no longer accepted */
+    snprintf(list, sizeof list, "%s=", a);
+    check(list, 0);
+    list[0] = 0;
+    for (int i = 0; i < 16; ++i) {
+        if (i) strcat(list, ",");
+        strcat(list, a);
+    }
+    check(list, 1);
+    strcat(list, ",");
+    strcat(list, a);
+    check(list, 0);
+    memset(list, ' ', sizeof list - 1);
+    memcpy(list, a, 52);
+    list[sizeof list - 1] = 0;
+    check(list, 0); /* snprintf-style truncation */
+    memcpy(mutated, a, 53);
+    mutated[10] = 0;
+    config = mutated;
+    reported_length = 52;
     assert(!node_is_authorized());
-    key[10] = 'A';
-    const sy_s64 lengths[] = {SY_ENOENT, 0, 1, 63, 65, 4096};
-    for (unsigned i = 0; i < sizeof lengths / sizeof lengths[0]; ++i) {
-        reported_length = lengths[i];
-        assert(!node_is_authorized());
-    }
+    config = a;
+    reported_length = SY_ENOENT;
+    assert(!node_is_authorized());
+    peer_result = SY_EPERM;
+    check(a, 0);
     return 0;
 }

@@ -8,7 +8,7 @@ them. These run inside Synchronicity's socket runtime, not the Linux kernel.
 | --- | --- | --- |
 | `echo` | Echoes binary streams with backpressure; 30-second idle timeout | Any caller able to connect; 16 concurrent streams |
 | `whoami` | Prints authenticated origin, device key and peer kind, then closes | Any caller able to connect; 8 concurrent streams |
-| `ssh-shell` | Interactive `/bin/bash` with PTY; read/write SFTP under `files` | One configured node public key; 4 concurrent connections, one session per connection |
+| `ssh-shell` | Interactive `/bin/bash` with PTY; read/write SFTP under `files` | Configured node public keys; 4 concurrent connections, one session per connection |
 
 Built against the SDK revision in [UPSTREAM.md](UPSTREAM.md). Review the
 capabilities shown when activating a socket. Existing Synchronicity
@@ -36,22 +36,32 @@ synch fetch https://raw.githubusercontent.com/AFK-surf/sykit/main/objects/whoami
 synch socket activate code/whoami.sock
 ```
 
-Connect with `synch socket connect nas:code/whoami.sock`. Verify that node
-independently before using its key for SSH access.
+Connect with `synch socket connect nas:code/whoami.sock` for identity diagnostics.
+Its `peer-key` output is hex; the SSH allowlist below uses base32.
 
 ## SSH and SFTP
 
-Set `allowed_node_key` to the connecting node's **64-character hexadecimal
-Iroh device public key**. This is not an origin name, SSH public key, or
-connection metadata. Uppercase and lowercase hex are accepted. Missing,
-malformed, or mismatched keys reject the connection before SSH starts.
+Set `allowed_node_key` to one or more **52-character, unpadded iroh base32
+node public keys**, separated by commas. Uppercase and lowercase are accepted,
+with optional spaces, tabs or newlines around each key. Quote the value when
+it contains whitespace. Use at most 16 keys and 1023 bytes of configuration.
+Hex, `=` padding, empty entries and malformed keys are rejected. The entire
+list must be valid, even if an earlier key matches the caller.
+
+This identifies authenticated nodes, not origin names, SSH keys or connection
+metadata. Verify the nodes independently before granting them shell access.
+Missing configuration or a caller absent from the list rejects the connection
+before SSH starts.
 
 ```sh
 synch fetch https://raw.githubusercontent.com/AFK-surf/sykit/main/objects/ssh-shell.o code/ssh.sock
-synch socket activate code/ssh.sock --config allowed_node_key=YOUR_64_HEX_NODE_PUBLIC_KEY
+synch socket activate code/ssh.sock --config 'allowed_node_key=FIRST_BASE32_NODE_KEY,SECOND_BASE32_NODE_KEY'
 ```
 
-From the allowed node:
+For a single node, supply just its base32 key without a comma. Existing
+hex-valued activations must be updated to base32 when deploying this version.
+
+From an allowed node:
 
 ```sh
 ssh -tt -o 'ProxyCommand=synch socket connect %h:code/ssh.sock' nas
@@ -61,7 +71,7 @@ sftp -o 'ProxyCommand=synch socket connect %h:code/ssh.sock' nas
 Keep normal SSH host-key verification enabled. The inner SSH exchange accepts
 `none` only after the outer authenticated node passes the gate. The SSH
 username does not select an OS user: the shell runs as the Synchronicity daemon
-account, with that account's host access. Anyone controlling the allowed node
+account, with that account's host access. Anyone controlling an allowed node
 and able to use its Synchronicity identity can obtain that access.
 
 SFTP can recursively read, create, replace and delete within the declared

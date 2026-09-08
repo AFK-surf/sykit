@@ -15,11 +15,27 @@ fn object(name: &str) -> Vec<u8> {
     )
     .unwrap()
 }
-fn allowed_key() -> String {
+fn diagnostic_key_hex() -> String {
     synch_sock::policy::NOBODY
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect()
+}
+
+// Independent RFC 4648 fixtures; parse with Iroh as a compatibility check.
+fn allowed_key() -> String {
+    let key = "lbtgmztgmztgmztgmztgmztgmztgmztgmztgmztgmztgmztgmzta";
+    assert_eq!(
+        key.parse::<synch_core::NodeId>().unwrap(),
+        peer(None).device_key
+    );
+    key.into()
+}
+fn alternate_key() -> String {
+    "25njqamcweflpvkl73j4szahhihoc4xt3ktcgjnpaingr5yhkena".into()
+}
+fn allowed_keys() -> String {
+    format!("{}, {}", alternate_key(), allowed_key())
 }
 
 #[tokio::test]
@@ -32,6 +48,13 @@ async fn ssh_denies_before_handshake_even_with_spoofed_metadata() {
         Some("g".repeat(64)),
         Some("a".repeat(65)),
         Some("0".repeat(64)),
+        Some(alternate_key()),
+        Some(format!("{},invalid", allowed_key())),
+        Some(format!("{},", allowed_key())),
+        Some(format!(",{}", allowed_key())),
+        Some(format!("{},,{}", alternate_key(), allowed_key())),
+        Some(format!("{}=", allowed_key())),
+        Some(format!("{}{}", allowed_key(), " ".repeat(1024))),
     ] {
         let policy = EffectivePolicy {
             config: key
@@ -99,7 +122,7 @@ async fn whoami_sends_identity_and_closes_without_client_eof() {
         format!(
             "peer-origin: {}\npeer-key: {}\npeer-kind: member\n",
             peer(None).origin,
-            allowed_key()
+            diagnostic_key_hex()
         )
     );
 }
@@ -183,7 +206,7 @@ async fn ssh_shell_serves_the_declared_bash_on_a_pty() {
 
     let policy = EffectivePolicy::granted(
         &declaration,
-        vec![("allowed_node_key".into(), allowed_key())],
+        vec![("allowed_node_key".into(), allowed_keys())],
         None,
         64,
     );
@@ -392,17 +415,19 @@ async fn ssh_shell_serves_declared_read_write_sftp() {
 
     let policy = EffectivePolicy::granted(
         &declaration,
-        vec![("allowed_node_key".into(), allowed_key())],
+        vec![("allowed_node_key".into(), allowed_keys())],
         None,
         64,
     );
     let (client_stream, server_stream) = tokio::io::duplex(256 * 1024);
     let (server_reader, server_writer) = tokio::io::split(server_stream);
+    let mut caller = peer(None);
+    caller.device_key = alternate_key().parse().unwrap();
     let invocation = harness.invocation(
         &elf,
         DuplexStream::new(server_reader, server_writer),
         policy,
-        peer(None),
+        caller,
         vec![],
     );
     let run = tokio::spawn(async move { harness.pool.run(invocation).await.unwrap() });

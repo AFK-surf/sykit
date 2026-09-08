@@ -29,8 +29,9 @@ Docker's injected root files do not enter the artifact comparison.
 
 ## Checks
 
-`./scripts/test.sh` covers malformed/mismatched node keys, immutable artifact
-selection, stale artifact detection and dangling-symlink refusal.
+`./scripts/test.sh` covers malformed/mismatched base32 node keys, complete
+allowlist validation, immutable artifact selection, stale artifact detection
+and dangling-symlink refusal.
 `./scripts/test-runtime.sh /path/to/synchronicity` executes committed BPF objects
 against the actual runtime. It covers transport identity despite spoofed
 metadata, binary echo under backpressure, permitted shell/SFTP operations,
@@ -41,7 +42,7 @@ and compares the entire artifact directory byte for byte.
 
 ## Trust and access
 
-SSH authorization deliberately grants the configured node a shell as the
+SSH authorization deliberately grants each configured node a shell as the
 serving daemon's OS account. SSH usernames do not select or authenticate a
 separate OS account. The SFTP scope does not sandbox that shell. Node-key
 validation runs before SSH starts; connection metadata never supplies policy.
@@ -52,3 +53,7 @@ Echo and whoami are intentionally available to any caller able to reach their
 socket. Keep activated script paths, activation configuration, the allowed
 node's identity and the build host under operator control. Reproducible builds
 and checksums establish consistency, not the trustworthiness of their source.
+
+The node allowlist accepts up to 16 comma-separated, unpadded base32 keys.
+Parsing validates every entry and the final unused encoding bits before
+granting access. Hex configuration is rejected.
