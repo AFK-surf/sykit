@@ -1,0 +1,10 @@
+*
+!Dockerfile
+!include/
+!include/**
+!src/
+!src/**
+!scripts/
+!scripts/compile.sh
+!toolchain/
+!toolchain/**
