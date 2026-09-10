@@ -45,6 +45,70 @@ class SessionTests(unittest.TestCase):
                 process.kill()
                 process.wait()
 
+    def test_bootstrap_retries_recovery_and_cleans_up_on_expiry(self):
+        import base64
+        import hashlib
+        import os
+        import subprocess
+        import sys
+        import tarfile
+        import time
+        import zlib
+        # A real foreground test process and control CLI, but no network or shell
+        # access. The first control command deliberately reports runtime recovery.
+        fake = "#!" + sys.executable + "\n" + """
+import os, pathlib, signal, sys, time
+root = pathlib.Path(sys.argv[2]); args = sys.argv[3:]
+if args == ['daemon', 'run']:
+    (root / 'pid').write_text(str(os.getpid()))
+    (root / 'control.sock').touch()
+    time.sleep(60)
+elif args == ['daemon', 'stop']:
+    os.kill(int((root / 'pid').read_text()), signal.SIGTERM)
+elif args[:2] == ['source', 'add']:
+    if not (root / 'retry').exists():
+        (root / 'retry').touch()
+        print('synch: daemon starting: recovering own head', file=sys.stderr)
+        sys.exit(1)
+elif args[:2] == ['socket', 'activate']:
+    assert 'allowed_peers=agent' in args
+    assert any(arg.startswith('expires_at=') for arg in args)
+else:
+    assert args[:2] == ['source', 'scan']
+"""
+        name = 'synchronicity-v0.1.10-aarch64-apple-darwin'
+        archive = io.BytesIO()
+        with tarfile.open(fileobj=archive, mode='w:gz') as tar:
+            entry = tarfile.TarInfo(name + '/synch')
+            content = fake.encode()
+            entry.size = len(content)
+            tar.addfile(entry, io.BytesIO(content))
+        raw = archive.getvalue()
+        invitation = dict(version='v0.1.10', expires_at=time.time() + 3,
+                          agent_key='agent', device_key='temporary', space='temporary',
+                          database=base64.b64encode(zlib.compress(b'fake-db')).decode(),
+                          object=base64.b64encode(b'fake-object').decode(),
+                          checksums={name + '.tar.gz': hashlib.sha256(raw).hexdigest()})
+        real_run = subprocess.run
+        directories = []
+        def run(args, **kwargs):
+            if args[0] == 'curl':
+                destination = Path(args[-1])
+                directories.append(destination.parent)
+                destination.write_bytes(raw)
+                return subprocess.CompletedProcess(args, 0)
+            return real_run(args, **kwargs)
+        output = io.StringIO()
+        with patch.object(client.subprocess, 'run', side_effect=run), \
+                patch.object(client.platform, 'system', return_value='Darwin'), \
+                patch.object(client.platform, 'machine', return_value='arm64'), \
+                patch('builtins.input', return_value='yes'), patch('sys.stdout', new=output):
+            client.main(invitation)
+        self.assertIn('READY: temporary', output.getvalue())
+        self.assertIn('Temporary node stopped', output.getvalue())
+        self.assertEqual(len(directories), 1)
+        self.assertFalse(directories[0].exists())
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -63,8 +63,8 @@ def main(invitation):
     command = []
     def interrupted(_signum, _frame):
         raise KeyboardInterrupt
-    for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
-        signal.signal(sig, interrupted)
+    handlers = {sig: signal.signal(sig, interrupted)
+                for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)}
     with tempfile.TemporaryDirectory(prefix='sykit-session-') as directory:
         root = Path(directory)
         try:
@@ -127,7 +127,14 @@ def main(invitation):
         except KeyboardInterrupt:
             print('\nStopping temporary access…')
         finally:
-            stop_node(command, process, env)
+            # A second Ctrl-C must not interrupt the bounded teardown.
+            for sig in handlers:
+                signal.signal(sig, signal.SIG_IGN)
+            try:
+                stop_node(command, process, env)
+            finally:
+                for sig, previous in handlers.items():
+                    signal.signal(sig, previous)
     print('Temporary node stopped; local session files removed. Delete this invitation script too.')
 
 
