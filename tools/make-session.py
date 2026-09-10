@@ -29,7 +29,7 @@ def generate(args):
     token = secrets.token_urlsafe(24) if args.publish_dir else None
     command = None
     if token:
-        _, command = short_command(args.public_base, token)  # fail before issuing a grant
+        _, command = short_command(args.public_base, token)  # validate the URL before issuing a grant
         private_store(args.publish_dir)
     if not args.output and not token:
         raise ValueError('provide --output or --publish-dir with --public-base')
@@ -133,7 +133,7 @@ if __name__ == '__main__':
     parser.add_argument('--seconds', type=int, default=600, help='lifetime from generation (30–3600 seconds)')
     parser.add_argument('--output', help='optional new PRIVATE invitation .py file (0600)')
     parser.add_argument('--publish-dir', help='private local store read by serve-invitations.py')
-    parser.add_argument('--public-base', help='HTTPS public URL prefix; complete command must fit in 100 characters')
+    parser.add_argument('--public-base', help='HTTPS public URL prefix; a short domain makes the command easier to copy')
     args = parser.parse_args()
     if not 30 <= args.seconds <= 3600:
         parser.error('--seconds must be between 30 and 3600')

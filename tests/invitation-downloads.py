@@ -95,9 +95,11 @@ class IssuanceTests(unittest.TestCase):
     def test_command_length_and_secure_base_validation(self):
         token = secrets.token_urlsafe(24)
         for base in ('http://example.com', 'https://u:p@example.com', 'https://example.com?a=1',
-                     'https://example.com#x', 'https://example.com/white space', 'https://' + 'a' * 100 + '.com'):
+                     'https://example.com#x', 'https://example.com/white space'):
             with self.assertRaises(ValueError):
                 short_command(base, token)
+        _, command = short_command('https://' + 'a' * 50 + '.example/long-prefix', token)
+        self.assertGreater(len(command), 100)  # length is a usability target, never an issuance gate
         with self.assertRaises(ValueError):
             short_command('https://example.com', '../secret')
 

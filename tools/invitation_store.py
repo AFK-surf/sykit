@@ -24,8 +24,6 @@ def short_command(public_base, token):
         raise ValueError('invalid invitation token')
     url = public_base.rstrip('/') + '/s/' + token
     command = 'curl -fsSL ' + shlex.quote(url) + ' | sh'
-    if len(command) > 100:
-        raise ValueError('public-base is too long: command would exceed 100 characters')
     return url, command
 
 

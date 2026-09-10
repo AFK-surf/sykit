@@ -185,13 +185,14 @@ it. This is not just a white-list edit or a timer around the SSH client. The
 outer supervisor also bounds its setup and lifetime using wall and monotonic time.
 The variant declares a process capability only: no SFTP, tree writes or egress.
 
-### Short commands (at most 100 characters)
+### Short commands
 
 The optional download origin turns a generated invitation into one copyable
-`curl -fsSL https://.../s/<ticket> | sh` command. The generator validates the
-**entire command length**, including shell quoting, before creating a key or
-delegation; a public base URL that cannot fit is rejected. Tickets have 192 bits
-of randomness. They are short-lived bearer URLs, not permanent public scripts.
+`curl -fsSL https://.../s/<ticket> | sh` command. The generator prints the
+actual command length, including shell quoting. Around 100 characters is a
+usability target, **not a limit**: a longer public URL still generates normally.
+Use a short HTTPS domain/path where practical; do not reduce ticket entropy to
+shorten the command. Tickets have 192 bits of randomness. They are short-lived bearer URLs, not permanent public scripts.
 
 A human operator first provisions HTTPS and runs this loopback-only origin on
 the same machine/private storage as the issuing agent:
