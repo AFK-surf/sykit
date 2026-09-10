@@ -24,16 +24,26 @@
    executable, argv, PTY permission, signals, and scoped SFTP access. `write`
    opts the service into mutation; the same-id tree-write capability supplies
    create/replace/delete authority and the default 16 MiB staging bound. */
-SY_MANIFEST("{\"manifest\":1,\"name\":\"ssh-shell\",\"max_streams\":4,"
+#ifdef SHELL_SESSION
+#include "session-deadline.h"
+#define PROGRAM_NAME "ssh-session"
+#else
+#define PROGRAM_NAME "ssh-shell"
+#endif
+SY_MANIFEST("{\"manifest\":1,\"name\":\"" PROGRAM_NAME "\",\"max_streams\":4,"
             "\"processes\":[{\"id\":1,\"allow\":[\"pty\"],"
             "\"executable\":\"" SHELL_EXECUTABLE "\","
             "\"argv\":[\"" SHELL_ARGV0 "\"],"
-            "\"allowed_signals\":[\"HUP\",\"INT\",\"TERM\"]}],"
+            "\"allowed_signals\":[\"HUP\",\"INT\",\"TERM\"]}]"
+#ifndef SHELL_SESSION
+            ","
             "\"file_transfers\":[{\"id\":1,\"protocol\":\"sftp\","
             "\"access\":[\"read\",\"write\",\"recursive\"],"
             "\"scope\":\"" SFTP_SCOPE "\"}],"
             "\"tree_writes\":[{\"id\":1,\"prefix\":\"" SFTP_SCOPE "\","
-            "\"allow\":[\"create\",\"replace\",\"delete\"]}]}");
+            "\"allow\":[\"create\",\"replace\",\"delete\"]}]"
+#endif
+            "}");
 
 /* JSON strings are length-delimited; strlen would accept "sftp\0suffix".
  * Compare the reported length as well as the bytes, rejecting truncation. */
@@ -130,6 +140,7 @@ static sy_s64 handle_request(sy_s64 event, sy_u64 id, struct session *s) {
     return finish(event, id, sent < 0 ? 0 : 1);
   }
 
+#ifndef SHELL_SESSION
   if (event_string_is(event, "request_type", "subsystem")) {
     if (s->pty >= 0 || s->sftp >= 0 || s->process >= 0 ||
         !event_string_is(event, "subsystem", "sftp"))
@@ -139,6 +150,8 @@ static sy_s64 handle_request(sy_s64 event, sy_u64 id, struct session *s) {
     s->sftp = backend;
     return finish(event, id, 1);
   }
+
+#endif
 
   /* exec, other subsystems, env, forwarding: not this socket's policy. The
      refusal costs nothing — none of those names could have started anything. */
@@ -208,6 +221,12 @@ static void collect_status(struct session *s) {
 }
 
 SY_ENTRY sy_s64 entry(void) {
+#ifdef SHELL_SESSION
+  /* Absolute invitation expiry; once admitted, monotonic time also bounds it.
+     Missing/malformed/expired config is never an unlimited session. */
+  sy_u64 deadline = session_deadline();
+  if (!deadline) return 1;
+#endif
   /* Gate the authenticated transport identity before starting SSH or a backend.
      Inner SSH none is safe only because this check is mandatory. */
   if (!node_is_authorized()) {
@@ -215,6 +234,9 @@ SY_ENTRY sy_s64 entry(void) {
     return 1;
   }
 
+#ifdef SHELL_SESSION
+  if (!session_remaining(deadline)) return 1;
+#endif
   sy_s64 methods = sy_json_parse(SY_STR("[\"none\"]"));
   if (methods < 0) return 1;
   sy_s64 started = sy_ssh_start(SY_SELF, methods);
@@ -261,11 +283,20 @@ SY_ENTRY sy_s64 entry(void) {
       fds[nfds++] = (struct sy_pollfd){s.channel, SY_POLL_RDHUP, 0};
     }
 
-    if (sy_poll(fds, nfds, -1) <= 0) break; /* idle deadline, or all quiet */
+#ifdef SHELL_SESSION
+    sy_s64 left = session_remaining(deadline);
+    if (!left || sy_poll(fds, nfds, left) <= 0) break;
+    if (!session_remaining(deadline)) break;
+#else
+    if (sy_poll(fds, nfds, -1) <= 0) break;
+#endif /* idle deadline, or all quiet */
 
     if (fds[0].revents & SY_POLL_IN) {
       sy_s64 event;
       while ((event = sy_ssh_next(SY_SELF)) > 0) {
+#ifdef SHELL_SESSION
+        if (!session_remaining(deadline)) { sy_close(event); goto expired; }
+#endif
         sy_s64 id = 0;
         if (sy_json_get_i64(event, SY_STR("id"), &id) < 0 || id <= 0) {
           sy_close(event);
@@ -340,6 +371,9 @@ SY_ENTRY sy_s64 entry(void) {
     if (fds[0].revents & (SY_POLL_ERR | SY_POLL_HUP)) break;
   }
 
+#ifdef SHELL_SESSION
+expired:
+#endif
   close_session(&s);
   return 0;
 }

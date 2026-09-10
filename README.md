@@ -9,6 +9,7 @@ them. These run inside Synchronicity's socket runtime, not the Linux kernel.
 | `echo` | Echoes binary streams with backpressure; 30-second idle timeout | Any caller able to connect; 16 concurrent streams |
 | `whoami` | Prints authenticated origin, device key and peer kind, then closes | Any caller able to connect; 8 concurrent streams |
 | `tcp-proxy` | Bidirectional TCP forwarding to `127.0.0.1` on a configured port | Same peer allowlist as SSH; 32 concurrent connections |
+| `ssh-session` | Expiring interactive shell; no SFTP; existing connections close at the deadline | Pinned agent key; generated private invitation, default 10 minutes |
 | `ssh-shell` | Interactive `/bin/bash` with PTY; read/write SFTP under `files` | Configured origins or node public keys; 4 concurrent connections, one session per connection |
 
 Built against the SDK revision in [UPSTREAM.md](UPSTREAM.md). Review the
@@ -126,6 +127,80 @@ review the resulting manifest. Do not grant untrusted callers write access to
 an activated socket path: replacing its bytes deploys a new program immediately.
 Activation configuration stays on the serving node; it is not embedded in the
 published object.
+
+## Temporary agent support sessions
+
+An agent can generate a script for a consenting user, then open an interactive
+shell on that user's machine until a fixed expiry. This is a **temporary session**,
+not an exactly-once command executor. SSH `exec` is still rejected; use the PTY
+shell to run several commands. Existing `ssh-shell` activations are unchanged.
+
+On an enrolled agent node with Synchronicity running and Python 3 available:
+
+```sh
+python3 tools/make-session.py --seconds 600 --output /private/path/support.py
+```
+
+The generator checks the agent's identity, creates a new isolated device key,
+trusts only the issuing agent, and gives that key a delegation for a **new empty
+space** until the invitation expiry. It does not grant access to the agent's
+existing file spaces or add a permanent network member. No control-plane API key,
+join key or agent private key is included. `--data-dir` selects an existing agent
+node; `--synch` selects its binary. The output is created exclusively, mode 0600.
+
+**Send the generated script privately to the intended user. It embeds a temporary
+device secret.** Anyone holding a copy can impersonate that temporary node until
+the delegation expires. It is an expiring invitation, not a replay-proof ticket:
+do not reuse it or post it to a public thread. Generate a fresh one for each user.
+The lifetime is 30–3600 seconds **from generation**, including download/setup time;
+the default is 600. Delayed delivery does not extend the grant.
+
+The user runs:
+
+```sh
+python3 support.py
+```
+
+After explicit `yes` consent, it downloads the official runtime matching the
+agent's version, verifies an embedded SHA-256 checksum, restores only the temporary
+identity into a private temporary directory, and starts a foreground-owned daemon.
+It publishes/activates `ssh-session.o` as `temporary-shell`, allowing only the
+agent's public key, and prints `READY`. No sudo, permanent binary installation,
+shell-profile change, SSH configuration change or startup service is needed.
+Requires Python 3, curl, `/bin/bash`, macOS or glibc Linux; v0.1.10 Linux archives
+require glibc 2.39. The generator uses release checksums directly, not the
+rate-limited unauthenticated `releases/latest` API.
+
+The generator prints the exact agent-side SSH command and an early network
+revocation command. Keep SSH host-key verification enabled. The user can press
+Ctrl-C or close the terminal to stop access. The supervisor stops the temporary
+daemon and removes its data/binary on normal expiry, SIGINT, SIGHUP and SIGTERM.
+Delete the invitation file after use; the script does not delete itself.
+
+`ssh-session` independently requires an `expires_at` Unix-second activation
+setting, rejects expired/malformed/missing or >1-hour deadlines, and closes
+**existing** sessions at the deadline as well as refusing new ones. Its admitted
+session timer is monotonic, so moving the wall clock backwards does not extend
+it. This is not just a white-list edit or a timer around the SSH client. The
+outer supervisor also bounds its setup and lifetime using wall and monotonic time.
+The variant declares a process capability only: no SFTP, tree writes or egress.
+
+### Security and cleanup boundaries
+
+The shell runs as the user's account, **not in a sandbox**. It can modify files,
+read that account's secrets and start detached processes. Expiry closes the
+connection and the runtime terminates/reaps its direct shell with best-effort
+process-group cleanup; it cannot undo changes or guarantee cleanup of detached
+descendants. Do not use it to execute untrusted agent code.
+
+The grant expires in signed delegation state without a cleanup service on the
+agent. `synch delegate rm <temporary-key>` revokes early network access; user-side
+Ctrl-C is the explicit local shutdown. Removing/expiring delegation does not
+serve as the session timer: the program and supervisor enforce that separately.
+SIGKILL, machine crashes and power loss can prevent supervisor cleanup. The
+program's own deadline still prevents a surviving daemon from providing a new
+unexpired shell after the invitation deadline; leftover local temporary files
+may require manual removal. Local clock integrity is part of admission trust.
 
 ## TCP reverse proxy
 

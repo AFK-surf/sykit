@@ -1,6 +1,9 @@
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
+#undef memcpy
+#undef memset
+#undef memmove
 #define memcpy sdk_memcpy
 #define memset sdk_memset
 #define memmove sdk_memmove

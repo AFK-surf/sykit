@@ -79,3 +79,17 @@ Tests run the committed object against loopback TCP to check denied dials,
 invalid configuration, host egress enforcement, backpressure, both half-close
 orders and asynchronous connection failure. Local listener clients inherit the
 forwarding node's identity and receive the selected service's protocol access.
+
+## Expiring support invitations
+
+`ssh-session` shares the SSH state machine with `ssh-shell`, but has no SFTP or
+tree-write capability and requires a bounded absolute expiry. The user-side
+supervisor independently enforces expiry and stops the isolated daemon. See
+README's temporary-session section for the explicit consent, temporary secret,
+clock, replay, detached-child and crash-cleanup boundaries. This is authorized
+remote administration, not sandboxed or exactly-once execution.
+
+`make-session.py` never embeds the issuing agent's private key. The private output
+contains only a fresh temporary device identity and a short-lived space-scoped
+delegation is issued separately by the agent. The public-key allowlist pins the
+agent; no wildcard or arbitrary network member is admitted to the shell.
