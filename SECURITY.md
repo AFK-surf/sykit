@@ -93,3 +93,12 @@ remote administration, not sandboxed or exactly-once execution.
 contains only a fresh temporary device identity and a short-lived space-scoped
 delegation is issued separately by the agent. The public-key allowlist pins the
 agent; no wildcard or arbitrary network member is admitted to the shell.
+
+The optional short-command origin is read-only and loopback-bound. Issuance
+requires local access to the agent and its private store; downloads use
+unpredictable, expiring bearer tickets. A production HTTPS proxy must disable
+path logging/caching and apply rate/connection limits. The origin checks expiry
+on each request and prunes expired records, while the script independently
+checks expiry after retrieval. Short URLs do not make temporary device secrets
+public, single-use, or safe to forward. No public service is deployed by these
+tools. See README for deployment and revocation boundaries.

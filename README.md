@@ -185,6 +185,59 @@ it. This is not just a white-list edit or a timer around the SSH client. The
 outer supervisor also bounds its setup and lifetime using wall and monotonic time.
 The variant declares a process capability only: no SFTP, tree writes or egress.
 
+### Short commands (at most 100 characters)
+
+The optional download origin turns a generated invitation into one copyable
+`curl -fsSL https://.../s/<ticket> | sh` command. The generator validates the
+**entire command length**, including shell quoting, before creating a key or
+delegation; a public base URL that cannot fit is rejected. Tickets have 192 bits
+of randomness. They are short-lived bearer URLs, not permanent public scripts.
+
+A human operator first provisions HTTPS and runs this loopback-only origin on
+the same machine/private storage as the issuing agent:
+
+```sh
+python3 tools/serve-invitations.py --directory /private/sykit-invitations --port 8787
+```
+
+An HTTPS reverse proxy routes `/s/` to `127.0.0.1:8787`. If the public URL has a
+path prefix, strip that prefix before forwarding. Disable access logs and caches
+for this route, and enforce connection/request-rate limits at the proxy. Do not
+expose the Python origin directly to the Internet. It has a 32-handler cap and
+five-second socket timeout, but is not a substitute for the public edge. This
+repository supplies code, not a deployed domain, TLS certificate or service.
+
+Then the agent issues an invitation:
+
+```sh
+python3 tools/make-session.py --seconds 600 \
+  --publish-dir /private/sykit-invitations --public-base https://support.example
+```
+
+It prints the ready-to-copy command (under 100 characters for this example),
+expiry and the agent's SSH command. `--output` can additionally save the original
+private Python invitation; it is no longer required when publishing. The public
+base is operator configuration, **not a caller-chosen redirect**. Only HTTPS
+bases without credentials, query strings or fragments are accepted.
+
+The endpoint only downloads existing invitations: there is **no remote issuance
+or management API**, and no HTTP request can create a shell grant. Store access
+is local and private (directory 0700, records 0600); records are published
+atomically without overwrites. Missing, malformed, symlinked and expired tickets
+return 404. Responses are `no-store`/`no-referrer`; the origin never logs ticket
+paths. Valid expired records are removed within the next 30-second sweep while
+the origin is running. The embedded script still checks its own expiry, even if
+someone saved a response or a misconfigured proxy cached it.
+
+The shell wrapper opens `/dev/tty` for the user's explicit `yes`: piped script
+bytes cannot count as consent. It still requires Python 3 and curl. A headless
+execution without a controlling terminal fails rather than granting access.
+Download retries before expiry are allowed; this is not single-use retrieval.
+Treat a command in shell history/chat like the private invitation it downloads.
+To disable a download early, remove its private `<ticket>.json` record. This does
+not revoke a copy already downloaded or an active shell; use the existing
+network-revocation/local-stop controls for those.
+
 ### Security and cleanup boundaries
 
 The shell runs as the user's account, **not in a sandbox**. It can modify files,

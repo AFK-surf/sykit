@@ -13,6 +13,7 @@ import subprocess
 import tempfile
 import time
 import zlib
+from invitation_store import private_store, publish, shell_script, short_command
 
 ROOT = Path(__file__).resolve().parents[1]
 KEY = r'[ybndrfg8ejkmcpqxot1uwisza345h769]{52}'
@@ -23,6 +24,21 @@ def run(command, **kwargs):
 
 
 def generate(args):
+    if bool(args.publish_dir) != bool(args.public_base):
+        raise ValueError('--publish-dir and --public-base must be supplied together')
+    token = secrets.token_urlsafe(24) if args.publish_dir else None
+    command = None
+    if token:
+        _, command = short_command(args.public_base, token)  # fail before issuing a grant
+        private_store(args.publish_dir)
+    if not args.output and not token:
+        raise ValueError('provide --output or --publish-dir with --public-base')
+    with tempfile.TemporaryDirectory(prefix='sykit-output-') as temporary:
+        output = Path(args.output) if args.output else Path(temporary) / 'invitation.py'
+        generate_to(args, output, token, command)
+
+
+def generate_to(args, output, token, command):
     agent = [args.synch]
     if args.data_dir:
         agent += ['--data-dir', args.data_dir]
@@ -47,7 +63,6 @@ def generate(args):
         checksums[name.lstrip('*')] = digest
     program = ROOT / 'objects/ssh-session.o'
     run(agent + ['socket', 'inspect', str(program)])
-    output = Path(args.output)
     # Refuse overwrite before creating any identity or delegation.
     with output.open('x') as out:
         os.chmod(output, 0o600)
@@ -88,15 +103,22 @@ def generate(args):
                 out.write(template.replace('INVITATION = None', 'INVITATION = ' + repr(payload), 1))
                 out.flush()
                 os.fsync(out.fileno())
+                if token:
+                    publish(args.publish_dir, token, shell_script(output.read_text()), expires)
         except BaseException:
             output.unlink(missing_ok=True)
             if granted:
                 run(agent + ['delegate', 'rm', device])
             raise
     proxy = shlex.join(agent + ['socket', 'connect', 'key:' + device + ':temporary-shell'])
-    print('PRIVATE invitation:', output)
-    print('Send only to the intended user; it contains an expiring temporary device key.')
-    print('User runs: python3', shlex.quote(str(output)))
+    if command:
+        print('PRIVATE command (' + str(len(command)) + ' characters):')
+        print(command)
+        print('The URL is an expiring bearer ticket; share only with the intended user.')
+    if args.output:
+        print('PRIVATE invitation:', output)
+        print('User runs: python3', shlex.quote(str(output)))
+    print('The invitation contains an expiring temporary device key.')
     print('Expires at Unix second:', expires)
     print('Agent connects after READY:')
     print(shlex.join(['ssh', '-tt', '-o', 'ProxyCommand=' + proxy, 'temporary-shell-' + device]))
@@ -109,7 +131,9 @@ if __name__ == '__main__':
     parser.add_argument('--synch', default='synch')
     parser.add_argument('--data-dir', help='existing agent node data directory')
     parser.add_argument('--seconds', type=int, default=600, help='lifetime from generation (30–3600 seconds)')
-    parser.add_argument('--output', required=True, help='new PRIVATE invitation .py file (0600)')
+    parser.add_argument('--output', help='optional new PRIVATE invitation .py file (0600)')
+    parser.add_argument('--publish-dir', help='private local store read by serve-invitations.py')
+    parser.add_argument('--public-base', help='HTTPS public URL prefix; complete command must fit in 100 characters')
     args = parser.parse_args()
     if not 30 <= args.seconds <= 3600:
         parser.error('--seconds must be between 30 and 3600')
