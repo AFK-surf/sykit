@@ -180,7 +180,7 @@ agent no longer creates device keys, copies SQLite databases or signs grants
 from its local daemon. Wait for ordinary grant replication before connecting:
 
 ```sh
-ssh -tt -o "ProxyCommand=synch socket connect key:$DEVICE_KEY:temporary-shell" temporary-shell
+ssh -tt -o "ProxyCommand=synch socket connect key:$DEVICE_KEY:temporary-shell" "temporary-shell-$DEVICE_KEY"
 ```
 
 Keep host-key verification enabled. `LOCAL READY` means the local socket is
