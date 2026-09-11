@@ -9,6 +9,7 @@ them. These run inside Synchronicity's socket runtime, not the Linux kernel.
 | `echo` | Echoes binary streams with backpressure; 30-second idle timeout | Any caller able to connect; 16 concurrent streams |
 | `whoami` | Prints authenticated origin, device key and peer kind, then closes | Any caller able to connect; 8 concurrent streams |
 | `tcp-proxy` | Bidirectional TCP forwarding to `127.0.0.1` on a configured port | Same peer allowlist as SSH; 32 concurrent connections |
+| `ssh-session` | Same shell and SFTP as ssh-shell; existing connections close at the deadline | Pinned agent key; hosted delegate registration, default 10 minutes |
 | `ssh-shell` | Interactive `/bin/bash` with PTY; read/write SFTP under `files` | Configured origins or node public keys; 4 concurrent connections, one session per connection |
 
 Built against the SDK revision in [UPSTREAM.md](UPSTREAM.md). Review the
@@ -126,6 +127,86 @@ review the resulting manifest. Do not grant untrusted callers write access to
 an activated socket path: replacing its bytes deploys a new program immediately.
 Activation configuration stays on the serving node; it is not embedded in the
 published object.
+
+## Temporary agent support sessions
+
+`ssh-session` is `ssh-shell` with deadline checks: the same shell, PTY and scoped
+SFTP/tree-write capabilities. It requires an absolute `expires_at` Unix second,
+rejects missing/malformed/expired or >1-hour deadlines, and closes existing
+sessions at the deadline. Its admitted timer is monotonic. SSH `exec` remains
+rejected, just as in `ssh-shell`; use the interactive PTY shell.
+
+### User: start a temporary device
+
+The only helper is a standalone bootstrap, not a private invitation generator:
+
+```sh
+python3 tools/session-client.py --agent-key <controller-public-key> --seconds 600
+```
+
+After explicit `yes` consent, it downloads pinned Synchronicity v0.1.10 and
+checks the release SHA-256, creates a device key **locally**, trusts only the
+controller, and activates `temporary-shell` with the controller's public-key
+allowlist and deadline. The program comes from this checkout or a pinned,
+checksum-verified artifact when the script is used standalone. The script prints
+the temporary public key and the exact registration JSON. Send these public
+values to the operator; the private key never leaves the device.
+
+Python 3, curl, `/bin/bash`, and macOS or glibc Linux are required. v0.1.10 Linux
+needs glibc 2.39. The lifetime includes consent/download/setup time, defaults to
+600 seconds and accepts 30–3600. No permanent service, installation or profile
+change is made. Keep the terminal open; Ctrl-C stops the node. There is no
+short-link server, bearer ticket store or embedded database to distribute.
+Command length is not restricted; applications may provide their own public
+bootstrap distribution or UI.
+
+### Operator: register through the managed control plane
+
+**Requires [synchronicity PR #148](https://github.com/AFK-surf/synchronicity/pull/148)
+on the control plane and managed data plane (write-tunnel v2). This PR does not
+deploy that API.** The controller must be a named member of that hosted network.
+Use an org member/admin API key only on the operator's side, never in the user's
+script. Set `CP`, `ORG`, `NET`, `DEVICE_KEY`, and `REGISTRATION_JSON` from the
+chosen network and the bootstrap's output:
+
+```sh
+curl -fsS -X PUT "$CP/api/orgs/$ORG/networks/$NET/delegations/$DEVICE_KEY" \
+  -H "Authorization: Bearer $CP_API_KEY" -H 'content-type: application/json' \
+  --data "$REGISTRATION_JSON"
+```
+
+The data plane signs an ordinary delegation for the fresh temporary space. The
+agent no longer creates device keys, copies SQLite databases or signs grants
+from its local daemon. Wait for ordinary grant replication before connecting:
+
+```sh
+ssh -tt -o "ProxyCommand=synch socket connect key:$DEVICE_KEY:temporary-shell" "temporary-shell-$DEVICE_KEY"
+```
+
+Keep host-key verification enabled. `LOCAL READY` means the local socket is
+active, not that API registration or replication has completed. SFTP retains
+`ssh-shell`'s `files` scope; this bootstrap does not grant access to any existing
+network file spaces or automatically populate that scope.
+
+Early network revocation uses the same issuer, not local `synch delegate rm`:
+
+```sh
+curl -fsS -X DELETE "$CP/api/orgs/$ORG/networks/$NET/delegations/$DEVICE_KEY" \
+  -H "Authorization: Bearer $CP_API_KEY"
+```
+
+A timeout has an unknown outcome; retry the same absolute-expiry registration,
+not a new relative TTL. Do not retry registration after deciding to revoke.
+
+### Security and cleanup
+
+The shell runs as the user's account, **not in a sandbox**: it may read secrets,
+change files and launch detached processes. Expiry cannot undo those effects or
+guarantee removal of detached descendants. Delegation expiry/revocation governs
+network admission; the socket deadline and supervisor separately stop active
+access. Ctrl-C, SIGHUP, SIGTERM and normal expiry stop the owned daemon and remove
+temporary data/binary files. SIGKILL, crashes or power loss may leave local files
+requiring manual cleanup. Local clock integrity is part of admission trust.
 
 ## TCP reverse proxy
 
