@@ -82,8 +82,8 @@ forwarding node's identity and receive the selected service's protocol access.
 
 ## Expiring support invitations
 
-`ssh-session` shares the SSH state machine with `ssh-shell`, but has no SFTP or
-tree-write capability and requires a bounded absolute expiry. The user-side
+`ssh-session` shares the SSH state machine and capabilities with `ssh-shell`,
+including scoped SFTP and tree writes, and adds a bounded absolute expiry. The user-side
 supervisor independently enforces expiry and stops the isolated daemon. See
 README's temporary-session section for the explicit consent, temporary secret,
 clock, replay, detached-child and crash-cleanup boundaries. This is authorized
