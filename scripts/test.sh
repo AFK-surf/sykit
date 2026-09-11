@@ -10,5 +10,4 @@ ${CC:-cc} -std=c11 -O2 -Wall -Wextra -Werror -Iinclude tests/session-deadline.c 
 "$tmp/session-deadline"
 python3 tests/session-parity.py
 python3 tests/session-tools.py
-python3 tests/invitation-downloads.py
 python3 tests/build.py

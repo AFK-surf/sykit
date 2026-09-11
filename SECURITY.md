@@ -80,25 +80,20 @@ invalid configuration, host egress enforcement, backpressure, both half-close
 orders and asynchronous connection failure. Local listener clients inherit the
 forwarding node's identity and receive the selected service's protocol access.
 
-## Expiring support invitations
+## Temporary support devices
 
-`ssh-session` shares the SSH state machine and capabilities with `ssh-shell`,
-including scoped SFTP and tree writes, and adds a bounded absolute expiry. The user-side
-supervisor independently enforces expiry and stops the isolated daemon. See
-README's temporary-session section for the explicit consent, temporary secret,
-clock, replay, detached-child and crash-cleanup boundaries. This is authorized
-remote administration, not sandboxed or exactly-once execution.
+`ssh-session` shares the capabilities and request handling of `ssh-shell`, with
+additional absolute-expiry admission and active-session deadline checks. The
+bootstrap creates a private device identity locally and prints only its public
+key and registration scope/deadline. It neither accepts nor embeds control-plane
+credentials and never distributes a device database or private invitation.
 
-`make-session.py` never embeds the issuing agent's private key. The private output
-contains only a fresh temporary device identity and a short-lived space-scoped
-delegation is issued separately by the agent. The public-key allowlist pins the
-agent; no wildcard or arbitrary network member is admitted to the shell.
+An authorized operator registers/revokes the key through the hosted delegation
+API; the data plane signs the existing delegation record. The socket separately
+pins the controller's public key. Network admission is not application access,
+and delegation revocation is not the timer for an existing connection.
 
-The optional short-command origin is read-only and loopback-bound. Issuance
-requires local access to the agent and its private store; downloads use
-unpredictable, expiring bearer tickets. A production HTTPS proxy must disable
-path logging/caching and apply rate/connection limits. The origin checks expiry
-on each request and prunes expired records, while the script independently
-checks expiry after retrieval. Short URLs do not make temporary device secrets
-public, single-use, or safe to forward. No public service is deployed by these
-tools. See README for deployment and revocation boundaries.
+The bootstrap checks runtime/program downloads, asks explicit consent before
+starting, and owns the temporary daemon's normal shutdown and cleanup. See
+README for clock, direct-process, detached-child and crash-cleanup boundaries.
+This is authorized remote administration, not sandboxed or exactly-once execution.

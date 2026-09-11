@@ -9,7 +9,7 @@ them. These run inside Synchronicity's socket runtime, not the Linux kernel.
 | `echo` | Echoes binary streams with backpressure; 30-second idle timeout | Any caller able to connect; 16 concurrent streams |
 | `whoami` | Prints authenticated origin, device key and peer kind, then closes | Any caller able to connect; 8 concurrent streams |
 | `tcp-proxy` | Bidirectional TCP forwarding to `127.0.0.1` on a configured port | Same peer allowlist as SSH; 32 concurrent connections |
-| `ssh-session` | Same shell and SFTP as ssh-shell; existing connections close at the deadline | Pinned agent key; generated private invitation, default 10 minutes |
+| `ssh-session` | Same shell and SFTP as ssh-shell; existing connections close at the deadline | Pinned agent key; hosted delegate registration, default 10 minutes |
 | `ssh-shell` | Interactive `/bin/bash` with PTY; read/write SFTP under `files` | Configured origins or node public keys; 4 concurrent connections, one session per connection |
 
 Built against the SDK revision in [UPSTREAM.md](UPSTREAM.md). Review the
@@ -130,133 +130,83 @@ published object.
 
 ## Temporary agent support sessions
 
-An agent can generate a script for a consenting user, then open an interactive
-shell on that user's machine until a fixed expiry. This is a **temporary session**,
-not an exactly-once command executor. SSH `exec` is still rejected; use the PTY
-shell to run several commands. Existing `ssh-shell` activations are unchanged.
+`ssh-session` is `ssh-shell` with deadline checks: the same shell, PTY and scoped
+SFTP/tree-write capabilities. It requires an absolute `expires_at` Unix second,
+rejects missing/malformed/expired or >1-hour deadlines, and closes existing
+sessions at the deadline. Its admitted timer is monotonic. SSH `exec` remains
+rejected, just as in `ssh-shell`; use the interactive PTY shell.
 
-On an enrolled agent node with Synchronicity running and Python 3 available:
+### User: start a temporary device
 
-```sh
-python3 tools/make-session.py --seconds 600 --output /private/path/support.py
-```
-
-The generator checks the agent's identity, creates a new isolated device key,
-trusts only the issuing agent, and gives that key a delegation for a **new empty
-space** until the invitation expiry. It does not grant access to the agent's
-existing file spaces or add a permanent network member. No control-plane API key,
-join key or agent private key is included. `--data-dir` selects an existing agent
-node; `--synch` selects its binary. The output is created exclusively, mode 0600.
-
-**Send the generated script privately to the intended user. It embeds a temporary
-device secret.** Anyone holding a copy can impersonate that temporary node until
-the delegation expires. It is an expiring invitation, not a replay-proof ticket:
-do not reuse it or post it to a public thread. Generate a fresh one for each user.
-The lifetime is 30–3600 seconds **from generation**, including download/setup time;
-the default is 600. Delayed delivery does not extend the grant.
-
-The user runs:
+The only helper is a standalone bootstrap, not a private invitation generator:
 
 ```sh
-python3 support.py
+python3 tools/session-client.py --agent-key <controller-public-key> --seconds 600
 ```
 
-After explicit `yes` consent, it downloads the official runtime matching the
-agent's version, verifies an embedded SHA-256 checksum, restores only the temporary
-identity into a private temporary directory, and starts a foreground-owned daemon.
-It publishes/activates `ssh-session.o` as `temporary-shell`, allowing only the
-agent's public key, and prints `READY`. No sudo, permanent binary installation,
-shell-profile change, SSH configuration change or startup service is needed.
-Requires Python 3, curl, `/bin/bash`, macOS or glibc Linux; v0.1.10 Linux archives
-require glibc 2.39. The generator uses release checksums directly, not the
-rate-limited unauthenticated `releases/latest` API.
+After explicit `yes` consent, it downloads pinned Synchronicity v0.1.10 and
+checks the release SHA-256, creates a device key **locally**, trusts only the
+controller, and activates `temporary-shell` with the controller's public-key
+allowlist and deadline. The program comes from this checkout or a pinned,
+checksum-verified artifact when the script is used standalone. The script prints
+the temporary public key and the exact registration JSON. Send these public
+values to the operator; the private key never leaves the device.
 
-The generator prints the exact agent-side SSH command and an early network
-revocation command. Keep SSH host-key verification enabled. The user can press
-Ctrl-C or close the terminal to stop access. The supervisor stops the temporary
-daemon and removes its data/binary on normal expiry, SIGINT, SIGHUP and SIGTERM.
-Delete the invitation file after use; the script does not delete itself.
+Python 3, curl, `/bin/bash`, and macOS or glibc Linux are required. v0.1.10 Linux
+needs glibc 2.39. The lifetime includes consent/download/setup time, defaults to
+600 seconds and accepts 30–3600. No permanent service, installation or profile
+change is made. Keep the terminal open; Ctrl-C stops the node. There is no
+short-link server, bearer ticket store or embedded database to distribute.
+Command length is not restricted; applications may provide their own public
+bootstrap distribution or UI.
 
-`ssh-session` independently requires an `expires_at` Unix-second activation
-setting, rejects expired/malformed/missing or >1-hour deadlines, and closes
-**existing** sessions at the deadline as well as refusing new ones. Its admitted
-session timer is monotonic, so moving the wall clock backwards does not extend
-it. This is not just a white-list edit or a timer around the SSH client. The
-outer supervisor also bounds its setup and lifetime using wall and monotonic time.
-Apart from its deadline checks and program name, the variant has the same
-capabilities and request handling as `ssh-shell`, including read/write SFTP
-under `files` and the corresponding tree-write grants.
+### Operator: register through the managed control plane
 
-### Short commands
-
-The optional download origin turns a generated invitation into one copyable
-`curl -fsSL https://.../s/<ticket> | sh` command. The generator prints the
-actual command length, including shell quoting. Around 100 characters is a
-usability target, **not a limit**: a longer public URL still generates normally.
-Use a short HTTPS domain/path where practical; do not reduce ticket entropy to
-shorten the command. Tickets have 192 bits of randomness. They are short-lived bearer URLs, not permanent public scripts.
-
-A human operator first provisions HTTPS and runs this loopback-only origin on
-the same machine/private storage as the issuing agent:
+**Requires [synchronicity PR #148](https://github.com/AFK-surf/synchronicity/pull/148)
+on the control plane and managed data plane (write-tunnel v2). This PR does not
+deploy that API.** The controller must be a named member of that hosted network.
+Use an org member/admin API key only on the operator's side, never in the user's
+script. Set `CP`, `ORG`, `NET`, `DEVICE_KEY`, and `REGISTRATION_JSON` from the
+chosen network and the bootstrap's output:
 
 ```sh
-python3 tools/serve-invitations.py --directory /private/sykit-invitations --port 8787
+curl -fsS -X PUT "$CP/api/orgs/$ORG/networks/$NET/delegations/$DEVICE_KEY" \
+  -H "Authorization: Bearer $CP_API_KEY" -H 'content-type: application/json' \
+  --data "$REGISTRATION_JSON"
 ```
 
-An HTTPS reverse proxy routes `/s/` to `127.0.0.1:8787`. If the public URL has a
-path prefix, strip that prefix before forwarding. Disable access logs and caches
-for this route, and enforce connection/request-rate limits at the proxy. Do not
-expose the Python origin directly to the Internet. It has a 32-handler cap and
-five-second socket timeout, but is not a substitute for the public edge. This
-repository supplies code, not a deployed domain, TLS certificate or service.
-
-Then the agent issues an invitation:
+The data plane signs an ordinary delegation for the fresh temporary space. The
+agent no longer creates device keys, copies SQLite databases or signs grants
+from its local daemon. Wait for ordinary grant replication before connecting:
 
 ```sh
-python3 tools/make-session.py --seconds 600 \
-  --publish-dir /private/sykit-invitations --public-base https://support.example
+ssh -tt -o "ProxyCommand=synch socket connect key:$DEVICE_KEY:temporary-shell" temporary-shell
 ```
 
-It prints the ready-to-copy command (under 100 characters for this example),
-expiry and the agent's SSH command. `--output` can additionally save the original
-private Python invitation; it is no longer required when publishing. The public
-base is operator configuration, **not a caller-chosen redirect**. Only HTTPS
-bases without credentials, query strings or fragments are accepted.
+Keep host-key verification enabled. `LOCAL READY` means the local socket is
+active, not that API registration or replication has completed. SFTP retains
+`ssh-shell`'s `files` scope; this bootstrap does not grant access to any existing
+network file spaces or automatically populate that scope.
 
-The endpoint only downloads existing invitations: there is **no remote issuance
-or management API**, and no HTTP request can create a shell grant. Store access
-is local and private (directory 0700, records 0600); records are published
-atomically without overwrites. Missing, malformed, symlinked and expired tickets
-return 404. Responses are `no-store`/`no-referrer`; the origin never logs ticket
-paths. Valid expired records are removed within the next 30-second sweep while
-the origin is running. The embedded script still checks its own expiry, even if
-someone saved a response or a misconfigured proxy cached it.
+Early network revocation uses the same issuer, not local `synch delegate rm`:
 
-The shell wrapper opens `/dev/tty` for the user's explicit `yes`: piped script
-bytes cannot count as consent. It still requires Python 3 and curl. A headless
-execution without a controlling terminal fails rather than granting access.
-Download retries before expiry are allowed; this is not single-use retrieval.
-Treat a command in shell history/chat like the private invitation it downloads.
-To disable a download early, remove its private `<ticket>.json` record. This does
-not revoke a copy already downloaded or an active shell; use the existing
-network-revocation/local-stop controls for those.
+```sh
+curl -fsS -X DELETE "$CP/api/orgs/$ORG/networks/$NET/delegations/$DEVICE_KEY" \
+  -H "Authorization: Bearer $CP_API_KEY"
+```
 
-### Security and cleanup boundaries
+A timeout has an unknown outcome; retry the same absolute-expiry registration,
+not a new relative TTL. Do not retry registration after deciding to revoke.
 
-The shell runs as the user's account, **not in a sandbox**. It can modify files,
-read that account's secrets and start detached processes. Expiry closes the
-connection and the runtime terminates/reaps its direct shell with best-effort
-process-group cleanup; it cannot undo changes or guarantee cleanup of detached
-descendants. Do not use it to execute untrusted agent code.
+### Security and cleanup
 
-The grant expires in signed delegation state without a cleanup service on the
-agent. `synch delegate rm <temporary-key>` revokes early network access; user-side
-Ctrl-C is the explicit local shutdown. Removing/expiring delegation does not
-serve as the session timer: the program and supervisor enforce that separately.
-SIGKILL, machine crashes and power loss can prevent supervisor cleanup. The
-program's own deadline still prevents a surviving daemon from providing a new
-unexpired shell after the invitation deadline; leftover local temporary files
-may require manual removal. Local clock integrity is part of admission trust.
+The shell runs as the user's account, **not in a sandbox**: it may read secrets,
+change files and launch detached processes. Expiry cannot undo those effects or
+guarantee removal of detached descendants. Delegation expiry/revocation governs
+network admission; the socket deadline and supervisor separately stop active
+access. Ctrl-C, SIGHUP, SIGTERM and normal expiry stop the owned daemon and remove
+temporary data/binary files. SIGKILL, crashes or power loss may leave local files
+requiring manual cleanup. Local clock integrity is part of admission trust.
 
 ## TCP reverse proxy
 
