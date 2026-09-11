@@ -9,7 +9,7 @@ them. These run inside Synchronicity's socket runtime, not the Linux kernel.
 | `echo` | Echoes binary streams with backpressure; 30-second idle timeout | Any caller able to connect; 16 concurrent streams |
 | `whoami` | Prints authenticated origin, device key and peer kind, then closes | Any caller able to connect; 8 concurrent streams |
 | `tcp-proxy` | Bidirectional TCP forwarding to `127.0.0.1` on a configured port | Same peer allowlist as SSH; 32 concurrent connections |
-| `ssh-session` | Expiring interactive shell; no SFTP; existing connections close at the deadline | Pinned agent key; generated private invitation, default 10 minutes |
+| `ssh-session` | Same shell and SFTP as ssh-shell; existing connections close at the deadline | Pinned agent key; generated private invitation, default 10 minutes |
 | `ssh-shell` | Interactive `/bin/bash` with PTY; read/write SFTP under `files` | Configured origins or node public keys; 4 concurrent connections, one session per connection |
 
 Built against the SDK revision in [UPSTREAM.md](UPSTREAM.md). Review the
@@ -183,7 +183,9 @@ setting, rejects expired/malformed/missing or >1-hour deadlines, and closes
 session timer is monotonic, so moving the wall clock backwards does not extend
 it. This is not just a white-list edit or a timer around the SSH client. The
 outer supervisor also bounds its setup and lifetime using wall and monotonic time.
-The variant declares a process capability only: no SFTP, tree writes or egress.
+Apart from its deadline checks and program name, the variant has the same
+capabilities and request handling as `ssh-shell`, including read/write SFTP
+under `files` and the corresponding tree-write grants.
 
 ### Short commands
 

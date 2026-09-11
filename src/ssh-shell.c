@@ -35,14 +35,12 @@ SY_MANIFEST("{\"manifest\":1,\"name\":\"" PROGRAM_NAME "\",\"max_streams\":4,"
             "\"executable\":\"" SHELL_EXECUTABLE "\","
             "\"argv\":[\"" SHELL_ARGV0 "\"],"
             "\"allowed_signals\":[\"HUP\",\"INT\",\"TERM\"]}]"
-#ifndef SHELL_SESSION
             ","
             "\"file_transfers\":[{\"id\":1,\"protocol\":\"sftp\","
             "\"access\":[\"read\",\"write\",\"recursive\"],"
             "\"scope\":\"" SFTP_SCOPE "\"}],"
             "\"tree_writes\":[{\"id\":1,\"prefix\":\"" SFTP_SCOPE "\","
             "\"allow\":[\"create\",\"replace\",\"delete\"]}]"
-#endif
             "}");
 
 /* JSON strings are length-delimited; strlen would accept "sftp\0suffix".
@@ -140,7 +138,6 @@ static sy_s64 handle_request(sy_s64 event, sy_u64 id, struct session *s) {
     return finish(event, id, sent < 0 ? 0 : 1);
   }
 
-#ifndef SHELL_SESSION
   if (event_string_is(event, "request_type", "subsystem")) {
     if (s->pty >= 0 || s->sftp >= 0 || s->process >= 0 ||
         !event_string_is(event, "subsystem", "sftp"))
@@ -150,8 +147,6 @@ static sy_s64 handle_request(sy_s64 event, sy_u64 id, struct session *s) {
     s->sftp = backend;
     return finish(event, id, 1);
   }
-
-#endif
 
   /* exec, other subsystems, env, forwarding: not this socket's policy. The
      refusal costs nothing — none of those names could have started anything. */
